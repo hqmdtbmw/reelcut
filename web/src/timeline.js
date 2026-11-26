@@ -13,10 +13,69 @@ export function makeClip(id, name, url, sourceDuration) {
     sourceOut: sourceDuration,
     speed: 1,
     volume: 1,
+    muted: false,
     fadeIn: 0,
     fadeOut: 0,
     effects: { brightness: 100, contrast: 100, saturation: 100 },
   };
+}
+
+// Per-clip volume and mute. A muted clip keeps its volume, so
+// unmuting brings the level straight back. The preview and the
+// export both play the effective volume, never the raw one.
+
+// Clamp a clip volume to the 0 to 1 range. Bad input falls back
+// to full volume, the same way the music volume does.
+export function clampClipVolume(volume) {
+  if (!Number.isFinite(volume)) return 1;
+  return Math.min(1, Math.max(0, volume));
+}
+
+// What a clip actually sounds like: 0 when it is muted, its
+// volume otherwise. Old clips without a muted flag count as
+// unmuted.
+export function effectiveVolume(clip) {
+  if (!clip) return 0;
+  return clip.muted ? 0 : clampClipVolume(clip.volume);
+}
+
+// Set one clip's volume, leaving the rest alone. Setting the
+// volume above zero also unmutes the clip, since dragging the
+// slider up is how you turn a clip back on.
+export function setClipVolume(clips, id, volume) {
+  const next = clampClipVolume(volume);
+  return clips.map((c) => {
+    if (c.id !== id) return c;
+    return { ...c, volume: next, muted: next > 0 ? false : c.muted };
+  });
+}
+
+// Move one clip's volume up or down by a step, clamped to 0 to 1.
+// Changing the volume unmutes the clip, unless the new volume is
+// zero, in which case the mute flag stays as it is.
+export function adjustClipVolume(clips, id, delta) {
+  return clips.map((c) => {
+    if (c.id !== id) return c;
+    const next = clampClipVolume(clampClipVolume(c.volume) + delta);
+    return { ...c, volume: next, muted: next > 0 ? false : c.muted };
+  });
+}
+
+// Mute or unmute one clip, keeping its volume for later.
+// With no third argument it mutes.
+export function setClipMuted(clips, id, muted = true) {
+  return clips.map((c) => {
+    if (c.id !== id) return c;
+    return { ...c, muted: Boolean(muted) };
+  });
+}
+
+// Flip one clip's mute flag.
+export function toggleClipMuted(clips, id) {
+  return clips.map((c) => {
+    if (c.id !== id) return c;
+    return { ...c, muted: !c.muted };
+  });
 }
 
 // Colour effects. Each clip carries its own brightness, contrast and

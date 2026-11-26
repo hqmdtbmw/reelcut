@@ -14,6 +14,12 @@
 //   { kind: "delete-clip", index }
 //   { kind: "add-text", text, start, end }
 //   { kind: "mute" } | { kind: "set-volume", volume }
+//   { kind: "mute-clip", index } | { kind: "unmute-clip", index }
+//   { kind: "set-clip-volume", volume, index }
+//   { kind: "adjust-clip-volume", delta, index }
+// "mute this clip" and "set the volume to 50%" act on one clip:
+// the selected clip, or "clip 2" when a number is given. A plain
+// "mute it" or "set volume to 50%" still hits every clip.
 //   { kind: "fade-all", seconds }
 //   { kind: "add-music" }
 //   { kind: "remove-music" }
@@ -125,6 +131,49 @@ export function parseCommand(rawText, context = {}) {
     return { kind: "set-music-volume", volume: 0.75 };
   }
 
+  // Per-clip mute and volume. "mute this clip", "unmute clip 2",
+  // "set the volume to 50%", "turn the volume down". With no clip
+  // named, the selected clip is the target, so index -1 means
+  // "whichever clip is selected" and the app sorts it out.
+  const clipTarget = text.match(/(?:this|the selected|that) clip/) ||
+    text.match(/clip (\d+)/);
+  const clipIndex = clipTarget
+    ? clipTarget[1]
+      ? parseInt(clipTarget[1], 10) - 1
+      : context.selectedIndex ?? -1
+    : null;
+  if (/unmute/.test(text) && clipIndex !== null) {
+    return { kind: "unmute-clip", index: clipIndex };
+  }
+  if (/mute/.test(text) && clipIndex !== null) {
+    return { kind: "mute-clip", index: clipIndex };
+  }
+  const clipVolume = text.match(
+    /set (?:the volume|this clip'?s volume|the volume of (?:this|the selected|that) clip|clip (\d+) volume|the volume of clip (\d+)) to (\d{1,3})\s*(?:%|percent)?/,
+  );
+  if (clipVolume) {
+    const named = clipVolume[1] ? parseInt(clipVolume[1], 10) - 1 : clipVolume[2] ? parseInt(clipVolume[2], 10) - 1 : null;
+    return {
+      kind: "set-clip-volume",
+      volume: Math.min(100, parseInt(clipVolume[3], 10)) / 100,
+      index: named ?? context.selectedIndex ?? -1,
+    };
+  }
+  const turnVolume = text.match(/turn (?:the volume|this clip'?s volume|the volume of (?:this|the selected|that) clip) (up|down)(?: (\d{1,3})\s*(?:%|percent)?)?/);
+  if (turnVolume) {
+    const step = turnVolume[2] ? parseInt(turnVolume[2], 10) / 100 : 0.25;
+    return {
+      kind: "adjust-clip-volume",
+      delta: turnVolume[1] === "down" ? -step : step,
+      index: context.selectedIndex ?? -1,
+    };
+  }
+
+  // A bare "unmute it" means the selected clip, not every clip.
+  if (/unmute/.test(text)) {
+    return { kind: "unmute-clip", index: clipIndex ?? context.selectedIndex ?? -1 };
+  }
+
   if (/mute/.test(text)) {
     return { kind: "mute" };
   }
@@ -177,6 +226,8 @@ export const EXAMPLE_COMMANDS = [
   "split at 10 seconds",
   "add text hello world from 2 to 5",
   "mute it",
+  "mute this clip",
+  "set the volume to 50%",
   "make it brighter",
   "add music",
 ];

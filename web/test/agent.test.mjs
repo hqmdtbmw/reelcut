@@ -54,6 +54,44 @@ test("mute and volume", () => {
   assert.deepEqual(parseCommand("set volume to 50%"), { kind: "set-volume", volume: 0.5 });
 });
 
+test("mute and volume on one clip", () => {
+  assert.deepEqual(parseCommand("mute this clip", { selectedIndex: 1 }), { kind: "mute-clip", index: 1 });
+  assert.deepEqual(parseCommand("mute the selected clip", { selectedIndex: 0 }), { kind: "mute-clip", index: 0 });
+  assert.deepEqual(parseCommand("mute clip 2"), { kind: "mute-clip", index: 1 });
+  assert.deepEqual(parseCommand("unmute this clip", { selectedIndex: 1 }), { kind: "unmute-clip", index: 1 });
+  assert.deepEqual(parseCommand("unmute clip 2"), { kind: "unmute-clip", index: 1 });
+  assert.deepEqual(parseCommand("unmute it", { selectedIndex: 0 }), { kind: "unmute-clip", index: 0 });
+  assert.deepEqual(parseCommand("set the volume to 50%", { selectedIndex: 1 }), {
+    kind: "set-clip-volume",
+    volume: 0.5,
+    index: 1,
+  });
+  assert.deepEqual(parseCommand("set clip 2 volume to 25%"), { kind: "set-clip-volume", volume: 0.25, index: 1 });
+  assert.deepEqual(parseCommand("set this clip's volume to 75%", { selectedIndex: 0 }), {
+    kind: "set-clip-volume",
+    volume: 0.75,
+    index: 0,
+  });
+  assert.deepEqual(parseCommand("turn the volume down", { selectedIndex: 1 }), {
+    kind: "adjust-clip-volume",
+    delta: -0.25,
+    index: 1,
+  });
+  assert.deepEqual(parseCommand("turn the volume up", { selectedIndex: 0 }), {
+    kind: "adjust-clip-volume",
+    delta: 0.25,
+    index: 0,
+  });
+  assert.deepEqual(parseCommand("turn the volume down 20%", { selectedIndex: 0 }), {
+    kind: "adjust-clip-volume",
+    delta: -0.2,
+    index: 0,
+  });
+  // With nothing selected, a per-clip command says so with index -1.
+  assert.deepEqual(parseCommand("mute this clip"), { kind: "mute-clip", index: -1 });
+  assert.deepEqual(parseCommand("turn the volume down"), { kind: "adjust-clip-volume", delta: -0.25, index: -1 });
+});
+
 test("fades", () => {
   assert.deepEqual(parseCommand("add a fade of 1 second"), { kind: "fade-all", seconds: 1 });
   assert.deepEqual(parseCommand("add fades"), { kind: "fade-all", seconds: 0.5 });

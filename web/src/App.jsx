@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   adjustClipEffect,
+  adjustClipVolume,
   boringRanges,
   canRedo,
   canUndo,
@@ -12,6 +13,7 @@ import {
   cutdown,
   deleteClip,
   detectSilence,
+  effectiveVolume,
   formatTime,
   makeClip,
   makeHistory,
@@ -21,6 +23,8 @@ import {
   pushHistory,
   redoHistory,
   setClipEffects,
+  setClipMuted,
+  setClipVolume,
   shiftTimedItems,
   shortcutForEvent,
   snapshotState,
@@ -156,14 +160,14 @@ export default function App() {
       video.dataset.clip = currentClip.id;
       video.src = currentClip.url;
       video.playbackRate = currentClip.speed;
-      video.volume = currentClip.volume;
+      video.volume = effectiveVolume(currentClip);
     }
     const want = currentClip.sourceIn + (playhead - currentClip.start) * currentClip.speed;
     if (Math.abs(video.currentTime - want) > 0.3) {
       video.currentTime = Math.min(want, currentClip.sourceOut - 0.05);
     }
     video.playbackRate = currentClip.speed;
-    video.volume = currentClip.volume;
+    video.volume = effectiveVolume(currentClip);
   }, [playhead, currentClip]);
 
   // Drive playback: advance the playhead, hop to the next clip, apply fades.
@@ -572,6 +576,20 @@ export default function App() {
     window.__reelcutRec = null;
   }
 
+  // Find the clip an agent command means: by number when one is
+  // given, the selected clip otherwise. Returns the clip, or the
+  // message to say when there is none.
+  function resolveCommandClip(index, verb) {
+    const clip = index >= 0 ? packed[index] : packed.find((c) => c.id === selectedId);
+    if (clip) return { clip };
+    return {
+      error:
+        index >= 0
+          ? `There is no clip ${index + 1}. You have ${packed.length}.`
+          : `Select a clip first, then tell me to ${verb}.`,
+    };
+  }
+
   async function runCommand(text) {
     const parsed = parseCommand(text, {
       clipCount: clips.length,
@@ -664,13 +682,49 @@ export default function App() {
         return;
       }
       case "mute":
+        if (!clips.length) return setAgentSay("Import a video first.");
         recordHistory();
-        setClips(clips.map((c) => ({ ...c, volume: 0 })));
-        setAgentSay("Muted everything.");
+        setClips(clips.map((c) => ({ ...c, muted: true })));
+        setAgentSay("Muted everything. Each clip keeps its volume, so unmuting brings it back.");
         return;
-      case "set-volume":
+      case "mute-clip": {
+        const { clip, error } = resolveCommandClip(parsed.index, "mute it");
+        if (error) return setAgentSay(error);
         recordHistory();
-        setClips(clips.map((c) => ({ ...c, volume: parsed.volume })));
+        setClips(setClipMuted(clips, clip.id, true));
+        setAgentSay(`Muted ${clip.name}. Its volume is saved, so unmuting brings it back.`);
+        return;
+      }
+      case "unmute-clip": {
+        const { clip, error } = resolveCommandClip(parsed.index, "unmute it");
+        if (error) return setAgentSay(error);
+        recordHistory();
+        setClips(setClipMuted(clips, clip.id, false));
+        setAgentSay(`Unmuted ${clip.name}.`);
+        return;
+      }
+      case "set-clip-volume": {
+        const { clip, error } = resolveCommandClip(parsed.index, "set its volume");
+        if (error) return setAgentSay(error);
+        recordHistory();
+        setClips(setClipVolume(clips, clip.id, parsed.volume));
+        setAgentSay(`Volume on ${clip.name} is now ${Math.round(parsed.volume * 100)} percent.`);
+        return;
+      }
+      case "adjust-clip-volume": {
+        const { clip, error } = resolveCommandClip(parsed.index, "turn it up or down");
+        if (error) return setAgentSay(error);
+        recordHistory();
+        const next = adjustClipVolume(clips, clip.id, parsed.delta);
+        setClips(next);
+        const after = next.find((c) => c.id === clip.id);
+        setAgentSay(`Volume on ${clip.name} is now ${Math.round(effectiveVolume(after) * 100)} percent.`);
+        return;
+      }
+      case "set-volume":
+        if (!clips.length) return setAgentSay("Import a video first.");
+        recordHistory();
+        setClips(clips.map((c) => ({ ...c, volume: parsed.volume, muted: false })));
         setAgentSay(`Volume set to ${Math.round(parsed.volume * 100)} percent.`);
         return;
       case "fade-all":
@@ -770,7 +824,7 @@ export default function App() {
         const dest = mixCtx.createMediaStreamDestination();
         const elementSource = mixCtx.createMediaElementSource(video);
         clipGainNode = mixCtx.createGain();
-        clipGainNode.gain.value = packed[0].volume;
+        clipGainNode.gain.value = effectiveVolume(packed[0]);
         elementSource.connect(clipGainNode);
         clipGainNode.connect(dest);
         musicSource.connect(musicGain);
@@ -823,8 +877,8 @@ export default function App() {
       for (const clip of packed) {
         video.src = clip.url;
         video.playbackRate = clip.speed;
-        video.volume = mixCtx ? 1 : clip.volume;
-        if (clipGainNode) clipGainNode.gain.value = clip.volume;
+        video.volume = mixCtx ? 1 : effectiveVolume(clip);
+        if (clipGainNode) clipGainNode.gain.value = effectiveVolume(clip);
         await waitFor(video, "loadedmetadata");
         video.currentTime = clip.sourceIn;
         await waitFor(video, "seeked");
@@ -1034,7 +1088,8 @@ export default function App() {
                   <div className="clip-edge left" onPointerDown={(e) => startTrim(e, clip, "left")} />
                   <div className="clip-name">{clip.name}</div>
                   <div className="clip-meta">
-                    {formatTime(clipDuration(clip))} · {clip.speed}x · {Math.round(clip.volume * 100)}%
+                    {formatTime(clipDuration(clip))} · {clip.speed}x ·{" "}
+                    {clip.muted ? "muted" : `${Math.round(clip.volume * 100)}%`}
                   </div>
                   <div className="clip-edge right" onPointerDown={(e) => startTrim(e, clip, "right")} />
                 </div>
@@ -1096,16 +1151,24 @@ export default function App() {
                   />
                 </label>
                 <label>
-                  Volume: {Math.round(selected.volume * 100)}%
+                  Volume: {selected.muted ? "muted" : `${Math.round(selected.volume * 100)}%`}
                   <input
                     type="range"
                     min={0}
                     max={1}
                     step={0.05}
                     value={selected.volume}
-                    onChange={(e) => updateClip(selected.id, { volume: parseFloat(e.target.value) })}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value);
+                      updateClip(selected.id, { volume: v, muted: v > 0 ? false : selected.muted });
+                    }}
                   />
                 </label>
+                <div className="row">
+                  <button type="button" onClick={() => updateClip(selected.id, { muted: !selected.muted })}>
+                    {selected.muted ? "Unmute clip" : "Mute clip"}
+                  </button>
+                </div>
                 <label>
                   Fade in: {selected.fadeIn.toFixed(1)}s
                   <input
@@ -1175,7 +1238,7 @@ export default function App() {
                 </label>
               </>
             ) : (
-              <p className="hint">Click a clip on the timeline to change its speed, volume, fades and colours.</p>
+              <p className="hint">Click a clip on the timeline to change its speed, volume, mute, fades and colours.</p>
             )}
           </div>
 

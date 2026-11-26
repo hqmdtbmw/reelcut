@@ -2,9 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   adjustClipEffect,
+  adjustClipVolume,
   boringRanges,
   canRedo,
   canUndo,
+  clampClipVolume,
   clampEffect,
   clampMusicVolume,
   clipDuration,
@@ -14,6 +16,7 @@ import {
   deleteClip,
   detectSilence,
   captionsFromWords,
+  effectiveVolume,
   formatTime,
   makeClip,
   makeHistory,
@@ -25,10 +28,13 @@ import {
   pushHistory,
   redoHistory,
   setClipEffects,
+  setClipMuted,
+  setClipVolume,
   shiftTimedItems,
   shortcutForEvent,
   snapshotState,
   splitClip,
+  toggleClipMuted,
   totalDuration,
   trimClip,
   undoHistory,
@@ -251,6 +257,95 @@ test("adjustClipEffect moves one value and clamps at the ends", () => {
   assert.equal(over[0].effects.brightness, 200);
   const under = adjustClipEffect(twoClips(), "a", "saturation", -150);
   assert.equal(under[0].effects.saturation, 0);
+});
+
+test("new clips start unmuted at full volume", () => {
+  const clip = makeClip("a", "a.mp4", null, 10);
+  assert.equal(clip.volume, 1);
+  assert.equal(clip.muted, false);
+  assert.equal(effectiveVolume(clip), 1);
+});
+
+test("clip volume clamps to 0 to 1", () => {
+  assert.equal(clampClipVolume(0.5), 0.5);
+  assert.equal(clampClipVolume(2), 1);
+  assert.equal(clampClipVolume(-1), 0);
+  assert.equal(clampClipVolume(0), 0);
+  assert.equal(clampClipVolume(NaN), 1);
+  assert.equal(clampClipVolume(undefined), 1);
+});
+
+test("a muted clip is silent but keeps its volume", () => {
+  const clip = makeClip("a", "a.mp4", null, 10);
+  clip.volume = 0.6;
+  assert.equal(effectiveVolume(clip), 0.6);
+  const muted = setClipMuted([clip], "a");
+  assert.equal(muted[0].muted, true);
+  assert.equal(muted[0].volume, 0.6);
+  assert.equal(effectiveVolume(muted[0]), 0);
+  const back = setClipMuted(muted, "a", false);
+  assert.equal(back[0].muted, false);
+  assert.equal(effectiveVolume(back[0]), 0.6);
+});
+
+test("toggling mute flips one clip and leaves the rest alone", () => {
+  const out = toggleClipMuted(twoClips(), "b");
+  assert.equal(out[0].muted, false);
+  assert.equal(out[1].muted, true);
+  const again = toggleClipMuted(out, "b");
+  assert.equal(again[1].muted, false);
+});
+
+test("setting a clip volume unmutes it and leaves the rest alone", () => {
+  const muted = setClipMuted(twoClips(), "a", true);
+  const out = setClipVolume(muted, "a", 0.5);
+  assert.equal(out[0].volume, 0.5);
+  assert.equal(out[0].muted, false);
+  assert.equal(out[1].volume, 1);
+  assert.equal(out[1].muted, false);
+});
+
+test("setting a clip volume to zero keeps the mute flag as it is", () => {
+  const out = setClipVolume(twoClips(), "a", 0);
+  assert.equal(out[0].volume, 0);
+  assert.equal(out[0].muted, false);
+  const muted = setClipMuted(twoClips(), "a", true);
+  const still = setClipVolume(muted, "a", 0);
+  assert.equal(still[0].muted, true);
+});
+
+test("adjusting a clip volume moves it and clamps at the ends", () => {
+  const down = adjustClipVolume(twoClips(), "a", -0.25);
+  assert.equal(down[0].volume, 0.75);
+  assert.equal(down[1].volume, 1);
+  const over = adjustClipVolume(down, "a", 1);
+  assert.equal(over[0].volume, 1);
+  const under = adjustClipVolume(twoClips(), "a", -2);
+  assert.equal(under[0].volume, 0);
+});
+
+test("adjusting the volume of a muted clip turns it back on", () => {
+  const muted = setClipMuted(twoClips(), "a", true);
+  const out = adjustClipVolume(muted, "a", 0.25);
+  assert.equal(out[0].volume, 1);
+  assert.equal(out[0].muted, false);
+});
+
+test("split keeps the volume and mute of the clip it came from", () => {
+  const clips = [makeClip("a", "a.mp4", null, 10)];
+  const prepared = setClipMuted(setClipVolume(clips, "a", 0.4), "a", true);
+  const out = splitClip(prepared, "a", 4);
+  assert.equal(out.length, 2);
+  assert.equal(out[0].volume, 0.4);
+  assert.equal(out[0].muted, true);
+  assert.equal(out[1].volume, 0.4);
+  assert.equal(out[1].muted, true);
+});
+
+test("a clip without a muted flag counts as unmuted", () => {
+  const clip = { id: "a", volume: 0.7 };
+  assert.equal(effectiveVolume(clip), 0.7);
+  assert.equal(effectiveVolume(null), 0);
 });
 
 // Undo and redo, worked through the history helpers directly.

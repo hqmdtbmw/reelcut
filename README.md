@@ -46,15 +46,15 @@ wasm-pack build --target web --out-dir ../web/src/wasm --out-name reelcut-core
 ## What works now
 
 - Import one or more video files, preview with play and pause.
-- Timeline with trim by dragging clip edges, split at the playhead, delete, reorder, speed, volume, fade in and out.
+- Timeline with trim by dragging clip edges, split at the playhead, delete, reorder, speed, volume, fade in and out. Every clip has its own volume from 0 to 100 percent and a mute toggle in the clip panel, and muting keeps the volume so unmuting brings it straight back. The timeline shows "muted" on a muted clip.
 - Undo and redo for every timeline edit, with buttons by the timeline and keyboard shortcuts: Space plays or pauses, S splits at the playhead, Delete removes the selected clip, Ctrl+Z undoes, Ctrl+Shift+Z redoes. The shortcuts stay quiet while you type in a field.
 - Text overlays with position and timing, captions you can type or dictate while the video plays (Chrome only).
-- Agent bar: remove the silences, cut the boring parts, add captions, cut the first seconds, make a 30 second cutdown, make it vertical or horizontal, speed the whole thing up or down, split at a time, delete a clip, add text, mute, set volume, add fades, add music.
+- Agent bar: remove the silences, cut the boring parts, add captions, cut the first seconds, make a 30 second cutdown, make it vertical or horizontal, speed the whole thing up or down, split at a time, delete a clip, add text, mute, set volume, add fades, add music. Volume and mute work per clip too: "mute this clip", "unmute clip 2", "set the volume to 50%", "turn the volume down". A plain "mute it" or "set volume to 50%" still hits every clip.
 - Background music: pick an audio file and it plays under your video while you preview, looping to fill the edit. You can change its volume or take it out, and the export mixes it in with the clip audio.
 - Colour controls on every clip: brightness, contrast and saturation from 0 to 200 percent, 100 is untouched. You see them live in the preview and they are baked into the export. Tell the agent "make it brighter" or "turn the saturation down" and it changes the selected clip, or all of them if you say so.
 - Silence removal reads the real audio of your clips, finds the quiet stretches with the Rust core (WebAssembly when it loads, JavaScript mirror otherwise), and cuts them out.
 - Cutting the boring parts uses your captions: it finds the gaps longer than 3 seconds where nobody says anything and cuts them out, leaving half a second of breathing room on each side. Your captions and text overlays move with the cuts.
-- Export renders the full sequence to a webm file through canvas and MediaRecorder, with overlays, captions, fades and audio.
+- Export renders the full sequence to a webm file through canvas and MediaRecorder, with overlays, captions, fades, per-clip volume and mute, and audio.
 - Vertical 9:16 and horizontal 16:9 output.
 
 ## What is next
@@ -66,6 +66,7 @@ wasm-pack build --target web --out-dir ../web/src/wasm --out-name reelcut-core
 ## What it can't do yet
 
 - Export is webm (VP9/Opus). MP4 export needs a native encoder and comes with the desktop shell.
+- Export audio without background music is silent right now, a known bug: the export takes its audio from a preview element that never plays. Add music and the export mixes the clip audio in at each clip's own volume and mute.
 - Caption dictation listens through your microphone while the video plays, so it needs a quiet room and only works in Chrome. Typed captions work everywhere.
 - Silence removal needs an audio track in the clip. A clip with no audio has nothing to remove.
 - Cutting the boring parts needs captions, so it knows where nobody is talking. Without captions, remove the silences works from the audio instead.
