@@ -54,7 +54,7 @@ wasm-pack build --target web --out-dir ../web/src/wasm --out-name reelcut-core
 - Colour controls on every clip: brightness, contrast and saturation from 0 to 200 percent, 100 is untouched. You see them live in the preview and they are baked into the export. Tell the agent "make it brighter" or "turn the saturation down" and it changes the selected clip, or all of them if you say so.
 - Silence removal reads the real audio of your clips, finds the quiet stretches with the Rust core (WebAssembly when it loads, JavaScript mirror otherwise), and cuts them out.
 - Cutting the boring parts uses your captions: it finds the gaps longer than 3 seconds where nobody says anything and cuts them out, leaving half a second of breathing room on each side. Your captions and text overlays move with the cuts.
-- Export renders the full sequence to a webm file through canvas and MediaRecorder, with overlays, captions, fades, per-clip volume and mute, and audio.
+- Export renders the full sequence to a webm file through canvas and MediaRecorder, with overlays, captions, fades, per-clip volume and mute, and audio. The clip audio is in the export whether or not you added background music.
 - Vertical 9:16 and horizontal 16:9 output.
 
 ## What is next
@@ -66,7 +66,6 @@ wasm-pack build --target web --out-dir ../web/src/wasm --out-name reelcut-core
 ## What it can't do yet
 
 - Export is webm (VP9/Opus). MP4 export needs a native encoder and comes with the desktop shell.
-- Export audio without background music is silent right now, a known bug: the export takes its audio from a preview element that never plays. Add music and the export mixes the clip audio in at each clip's own volume and mute.
 - Caption dictation listens through your microphone while the video plays, so it needs a quiet room and only works in Chrome. Typed captions work everywhere.
 - Silence removal needs an audio track in the clip. A clip with no audio has nothing to remove.
 - Cutting the boring parts needs captions, so it knows where nobody is talking. Without captions, remove the silences works from the audio instead.

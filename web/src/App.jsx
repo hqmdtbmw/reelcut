@@ -34,6 +34,7 @@ import {
   undoHistory,
 } from "./timeline.js";
 import { EXAMPLE_COMMANDS, parseCommand } from "./agent.js";
+import { buildExportAudio, setExportClipVolume, stopExportAudio } from "./exportAudio.js";
 
 let nextId = 1;
 function newId(prefix) {
@@ -804,41 +805,29 @@ export default function App() {
     const video = document.createElement("video");
     video.muted = false;
     video.crossOrigin = "anonymous";
-    let audioTrack = null;
-    let mixCtx = null;
-    let musicSource = null;
-    let clipGainNode = null;
-    if (music) {
-      // Mix the music with the clip audio in an AudioContext, so the
-      // export has one audio track with both. The music loops to cover
-      // the whole edit, and the clip gain follows each clip's volume.
-      try {
-        mixCtx = new (window.AudioContext || window.webkitAudioContext)();
-        const buf = await music.file.arrayBuffer();
-        const decoded = await mixCtx.decodeAudioData(buf);
-        musicSource = mixCtx.createBufferSource();
-        musicSource.buffer = decoded;
-        musicSource.loop = true;
-        const musicGain = mixCtx.createGain();
-        musicGain.gain.value = clampMusicVolume(music.volume);
-        const dest = mixCtx.createMediaStreamDestination();
-        const elementSource = mixCtx.createMediaElementSource(video);
-        clipGainNode = mixCtx.createGain();
-        clipGainNode.gain.value = effectiveVolume(packed[0]);
-        elementSource.connect(clipGainNode);
-        clipGainNode.connect(dest);
-        musicSource.connect(musicGain);
-        musicGain.connect(dest);
-        musicSource.start();
-        const mixedTrack = dest.stream.getAudioTracks()[0];
-        if (mixedTrack) stream.addTrack(mixedTrack);
-      } catch {
-        mixCtx = null;
-        musicSource = null;
-        clipGainNode = null;
-      }
+    // Build the export audio mix: the clip sound runs through a gain
+    // that follows each clip's volume and mute, and the music mixes
+    // in beside it when there is any. Without music the mix is still
+    // built, so the export is no longer silent.
+    let mix = null;
+    try {
+      mix = await buildExportAudio({
+        createAudioContext: () => new (window.AudioContext || window.webkitAudioContext)(),
+        video,
+        music,
+        firstClip: packed[0],
+      });
+    } catch {
+      mix = null;
     }
-    if (!mixCtx) {
+    if (mix && mix.track) {
+      stream.addTrack(mix.track);
+    }
+    if (!mix) {
+      // Last resort for a browser with no AudioContext: take the audio
+      // straight from a probe element. It is silent in most browsers,
+      // the mix above is the real fix.
+      let audioTrack = null;
       try {
         const probe = document.createElement("video");
         probe.src = packed[0].url;
@@ -877,8 +866,8 @@ export default function App() {
       for (const clip of packed) {
         video.src = clip.url;
         video.playbackRate = clip.speed;
-        video.volume = mixCtx ? 1 : effectiveVolume(clip);
-        if (clipGainNode) clipGainNode.gain.value = effectiveVolume(clip);
+        video.volume = mix ? 1 : effectiveVolume(clip);
+        setExportClipVolume(mix, clip);
         await waitFor(video, "loadedmetadata");
         video.currentTime = clip.sourceIn;
         await waitFor(video, "seeked");
@@ -933,12 +922,7 @@ export default function App() {
     } finally {
       recorder.stop();
       video.pause();
-      try {
-        musicSource?.stop();
-      } catch {
-        // Already stopped, nothing to do.
-      }
-      if (mixCtx) mixCtx.close().catch(() => {});
+      stopExportAudio(mix);
     }
     await done;
     const blob = new Blob(chunks, { type: "video/webm" });
