@@ -9,6 +9,13 @@
 export function wasm_cut_range(timeline_json: string, start: number, end: number): string;
 
 /**
+ * Cut a timeline given as JSON down to its first `target` seconds,
+ * and return the new timeline as JSON. Returns an empty string when
+ * the input does not parse.
+ */
+export function wasm_cutdown(timeline_json: string, target: number): string;
+
+/**
  * Silence detection for the browser. Takes a Float32Array of
  * amplitudes and returns a JSON array of {start, end} ranges.
  */
@@ -25,6 +32,7 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly wasm_cut_range: (a: number, b: number, c: number, d: number) => [number, number];
+    readonly wasm_cutdown: (a: number, b: number, c: number) => [number, number];
     readonly wasm_detect_silence: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly wasm_timeline_duration: (a: number, b: number) => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;

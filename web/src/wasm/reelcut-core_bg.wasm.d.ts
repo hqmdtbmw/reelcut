@@ -2,6 +2,7 @@
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
 export const wasm_cut_range: (a: number, b: number, c: number, d: number) => [number, number];
+export const wasm_cutdown: (a: number, b: number, c: number) => [number, number];
 export const wasm_detect_silence: (a: number, b: number, c: number, d: number, e: number) => [number, number];
 export const wasm_timeline_duration: (a: number, b: number) => number;
 export const __wbindgen_externrefs: WebAssembly.Table;

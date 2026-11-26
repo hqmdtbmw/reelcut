@@ -48,7 +48,7 @@ wasm-pack build --target web --out-dir ../web/src/wasm --out-name reelcut-core
 - Import one or more video files, preview with play and pause.
 - Timeline with trim by dragging clip edges, split at the playhead, delete, reorder, speed, volume, fade in and out.
 - Text overlays with position and timing, captions you can type or dictate while the video plays (Chrome only).
-- Agent bar: remove the silences, add captions, cut the first seconds, make it vertical or horizontal, speed the whole thing up or down, split at a time, delete a clip, add text, mute, set volume, add fades.
+- Agent bar: remove the silences, add captions, cut the first seconds, make a 30 second cutdown, make it vertical or horizontal, speed the whole thing up or down, split at a time, delete a clip, add text, mute, set volume, add fades.
 - Silence removal reads the real audio of your clips, finds the quiet stretches with the Rust core (WebAssembly when it loads, JavaScript mirror otherwise), and cuts them out.
 - Export renders the full sequence to a webm file through canvas and MediaRecorder, with overlays, captions, fades and audio.
 - Vertical 9:16 and horizontal 16:9 output.
@@ -56,7 +56,7 @@ wasm-pack build --target web --out-dir ../web/src/wasm --out-name reelcut-core
 ## What is next
 
 - Auto captions from the audio itself, on device, instead of dictation.
-- More agent commands: "cut the boring parts", "add music", "make a 30 second cutdown".
+- More agent commands: "cut the boring parts", "add music".
 - Native shells for Linux, Windows and iOS using the same Rust core.
 - Multi-track timeline with a separate audio track.
 - Real-time preview effects and colour controls.

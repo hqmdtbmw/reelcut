@@ -6,6 +6,7 @@
 //   { kind: "remove-silences" }
 //   { kind: "add-captions" }
 //   { kind: "cut-first", seconds }
+//   { kind: "cutdown", seconds }
 //   { kind: "make-vertical" } | { kind: "make-horizontal" }
 //   { kind: "speed-all", factor }
 //   { kind: "split-at", seconds }
@@ -40,6 +41,15 @@ export function parseCommand(rawText, context = {}) {
   }
   if (/horizontal/.test(text) || /16:9/.test(text) || /landscape/.test(text) || /for youtube/.test(text)) {
     return { kind: "make-horizontal" };
+  }
+
+  // "make a 30 second cutdown", "make a 60 second version",
+  // "cut it down to 30 seconds".
+  const cutdownMatch =
+    text.match(/make (?:a )?(\d+(?:\.\d+)?)\s*(?:second|sec|s)\b.{0,12}(?:cutdown|cut|version|clip)/) ||
+    text.match(/cut (?:it |this |the video )?down to (\d+(?:\.\d+)?)\s*(?:second|sec|s)/);
+  if (cutdownMatch) {
+    return { kind: "cutdown", seconds: parseFloat(cutdownMatch[1]) };
   }
 
   const cutFirst = text.match(/cut (?:the )?first (\d+(?:\.\d+)?)\s*(?:seconds?|secs?|s\b)/);
@@ -105,6 +115,7 @@ export const EXAMPLE_COMMANDS = [
   "remove the silences",
   "add captions",
   "cut the first 5 seconds",
+  "make a 30 second cutdown",
   "make it vertical",
   "speed the whole thing up",
   "split at 10 seconds",

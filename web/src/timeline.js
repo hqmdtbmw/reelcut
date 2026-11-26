@@ -120,6 +120,25 @@ export function cutRange(clips, start, end) {
   return out;
 }
 
+// Keep only the first target seconds of the edit. Clips past the
+// target go, the clip straddling it is trimmed to end on the target.
+export function cutdown(clips, target) {
+  if (target <= 0) return clips;
+  const packed = packClips(clips);
+  const out = [];
+  for (const clip of packed) {
+    const end = clip.start + clipDuration(clip);
+    if (clip.start >= target) continue;
+    if (end > target) {
+      const cutSource = clip.sourceIn + (target - clip.start) * clip.speed;
+      out.push(stripStart({ ...clip, sourceOut: cutSource }));
+      continue;
+    }
+    out.push(stripStart(clip));
+  }
+  return out;
+}
+
 function stripStart(clip) {
   const { start, ...rest } = clip;
   return rest;

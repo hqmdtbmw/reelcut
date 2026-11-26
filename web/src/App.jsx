@@ -3,6 +3,7 @@ import {
   clipAtTime,
   clipDuration,
   cutRange,
+  cutdown,
   deleteClip,
   detectSilence,
   formatTime,
@@ -359,6 +360,22 @@ export default function App() {
         setClips(cutRange(clips, 0, seconds));
         seek(0);
         setAgentSay(`Cut the first ${seconds} seconds.`);
+        return;
+      }
+      case "cutdown": {
+        if (!clips.length) return setAgentSay("Import a video first.");
+        if (total <= parsed.seconds) {
+          setAgentSay(`It already runs ${total.toFixed(1)} seconds, shorter than ${parsed.seconds}. Nothing to cut.`);
+          return;
+        }
+        setClips(cutdown(clips, parsed.seconds));
+        setOverlays((prev) =>
+          prev
+            .filter((o) => o.start < parsed.seconds)
+            .map((o) => (o.end > parsed.seconds ? { ...o, end: parsed.seconds } : o)),
+        );
+        seek(0);
+        setAgentSay(`Cut it down to a ${parsed.seconds} second version.`);
         return;
       }
       case "make-vertical":

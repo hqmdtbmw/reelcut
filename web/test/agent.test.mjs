@@ -16,6 +16,13 @@ test("cut the first seconds", () => {
   assert.deepEqual(parseCommand("cut the first 2.5 secs"), { kind: "cut-first", seconds: 2.5 });
 });
 
+test("cutdown to a length", () => {
+  assert.deepEqual(parseCommand("make a 30 second cutdown"), { kind: "cutdown", seconds: 30 });
+  assert.deepEqual(parseCommand("make a 60 second version"), { kind: "cutdown", seconds: 60 });
+  assert.deepEqual(parseCommand("make a 30s cut"), { kind: "cutdown", seconds: 30 });
+  assert.deepEqual(parseCommand("cut it down to 45 seconds"), { kind: "cutdown", seconds: 45 });
+});
+
 test("vertical and horizontal", () => {
   assert.deepEqual(parseCommand("make it vertical"), { kind: "make-vertical" });
   assert.deepEqual(parseCommand("make this for tiktok"), { kind: "make-vertical" });

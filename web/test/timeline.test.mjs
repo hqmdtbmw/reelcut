@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   clipDuration,
   cutRange,
+  cutdown,
   deleteClip,
   detectSilence,
   captionsFromWords,
@@ -97,6 +98,25 @@ test("captions group words into lines", () => {
   assert.equal(caps.length, 2);
   assert.equal(caps[0].text, "hello world");
   assert.equal(caps[1].text, "later");
+});
+
+test("cutdown trims the last clip and drops the rest", () => {
+  const out = cutdown(twoClips(), 12);
+  assert.equal(out.length, 2);
+  assert.equal(totalDuration(out), 12);
+  assert.equal(out[1].sourceOut, 2);
+  assert.equal(clipDuration(out[1]), 2);
+});
+
+test("cutdown drops trailing clips", () => {
+  const out = cutdown(twoClips(), 8);
+  assert.equal(out.length, 1);
+  assert.equal(totalDuration(out), 8);
+});
+
+test("cutdown leaves a short timeline alone", () => {
+  assert.equal(totalDuration(cutdown(twoClips(), 16)), 16);
+  assert.equal(totalDuration(cutdown(twoClips(), 20)), 16);
 });
 
 test("formatTime reads like a clock", () => {

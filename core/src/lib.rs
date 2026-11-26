@@ -328,6 +328,36 @@ impl Timeline {
         removed
     }
 
+    /// Keep only the first `target` seconds of the edit. Clips past
+    /// the target are dropped, the clip straddling it is trimmed, and
+    /// text overlays are clamped to the new end. Returns false when
+    /// the edit is already that short.
+    pub fn cutdown(&mut self, target: f64) -> bool {
+        if target <= 0.0 || self.total_duration() <= target {
+            return false;
+        }
+        let mut kept: Vec<Clip> = Vec::new();
+        for clip in self.clips.iter() {
+            if clip.start >= target {
+                continue;
+            }
+            let mut clip = clip.clone();
+            if clip.end() > target {
+                clip.source_out = clip.source_time_at(target);
+            }
+            kept.push(clip);
+        }
+        self.clips = kept;
+        self.overlays.retain(|o| o.start < target);
+        for overlay in self.overlays.iter_mut() {
+            if overlay.end > target {
+                overlay.end = target;
+            }
+        }
+        self.reflow_from(0);
+        true
+    }
+
     /// Switch the output to vertical 9:16.
     pub fn make_vertical(&mut self) {
         self.width = 1080;
@@ -488,6 +518,19 @@ pub fn wasm_timeline_duration(timeline_json: &str) -> f64 {
     }
 }
 
+/// Cut a timeline given as JSON down to its first `target` seconds,
+/// and return the new timeline as JSON. Returns an empty string when
+/// the input does not parse.
+#[wasm_bindgen]
+pub fn wasm_cutdown(timeline_json: &str, target: f64) -> String {
+    let mut timeline = match Timeline::from_json(timeline_json) {
+        Some(t) => t,
+        None => return String::new(),
+    };
+    timeline.cutdown(target);
+    timeline.to_json()
+}
+
 /// Cut a time range out of a timeline given as JSON, and return the
 /// new timeline as JSON. Returns an empty string when the input does
 /// not parse.
@@ -642,6 +685,69 @@ mod tests {
         ];
         assert_eq!(t.remove_silences(&ranges), 2);
         assert!((t.total_duration() - 15.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cutdown_trims_the_last_clip() {
+        let mut t = sample_timeline();
+        assert!(t.cutdown(12.0));
+        assert_eq!(t.clips.len(), 2);
+        assert!((t.total_duration() - 12.0).abs() < 1e-9);
+        assert!((t.clips[1].duration() - 2.0).abs() < 1e-9);
+        assert!((t.clips[1].source_out - 4.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cutdown_drops_trailing_clips() {
+        let mut t = sample_timeline();
+        assert!(t.cutdown(8.0));
+        assert_eq!(t.clips.len(), 1);
+        assert!((t.total_duration() - 8.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cutdown_leaves_short_timelines_alone() {
+        let mut t = sample_timeline();
+        assert!(!t.cutdown(16.0));
+        assert!(!t.cutdown(20.0));
+        assert!(!t.cutdown(0.0));
+        assert_eq!(t.clips.len(), 2);
+    }
+
+    #[test]
+    fn cutdown_clamps_overlays() {
+        let mut t = sample_timeline();
+        t.add_overlay(TextOverlay {
+            id: "o1".to_string(),
+            text: "early".to_string(),
+            start: 1.0,
+            end: 3.0,
+            x: 0.5,
+            y: 0.5,
+            size: 48,
+        });
+        t.add_overlay(TextOverlay {
+            id: "o2".to_string(),
+            text: "late".to_string(),
+            start: 14.0,
+            end: 16.0,
+            x: 0.5,
+            y: 0.5,
+            size: 48,
+        });
+        t.add_overlay(TextOverlay {
+            id: "o3".to_string(),
+            text: "straddle".to_string(),
+            start: 9.0,
+            end: 13.0,
+            x: 0.5,
+            y: 0.5,
+            size: 48,
+        });
+        assert!(t.cutdown(12.0));
+        assert_eq!(t.overlays.len(), 2);
+        assert_eq!(t.overlays[0].text, "early");
+        assert!((t.overlays[1].end - 12.0).abs() < 1e-9);
     }
 
     #[test]
