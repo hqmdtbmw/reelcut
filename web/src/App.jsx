@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  adjustClipEffect,
   boringRanges,
   clampMusicVolume,
   clipAtTime,
   clipDuration,
+  clipFilter,
   cutRange,
   cutdown,
   deleteClip,
@@ -11,7 +13,9 @@ import {
   formatTime,
   makeClip,
   moveClip,
+  normaliseEffects,
   packClips,
+  setClipEffects,
   shiftTimedItems,
   splitClip,
   totalDuration,
@@ -553,6 +557,38 @@ export default function App() {
         setClips(clips.map((c) => ({ ...c, fadeIn: parsed.seconds, fadeOut: parsed.seconds })));
         setAgentSay(`Added a ${parsed.seconds} second fade at the start and end of every clip.`);
         return;
+      case "set-effect": {
+        if (!clips.length) return setAgentSay("Import a video first.");
+        const targets = parsed.scope === "all" || !selected ? packed.map((c) => c.id) : [selected.id];
+        let next = clips;
+        for (const id of targets) {
+          next =
+            parsed.mode === "set"
+              ? setClipEffects(next, id, { [parsed.effect]: parsed.value })
+              : adjustClipEffect(next, id, parsed.effect, parsed.value);
+        }
+        setClips(next);
+        const first = next.find((c) => c.id === targets[0]);
+        const value = first ? normaliseEffects(first.effects)[parsed.effect] : 100;
+        const label = parsed.effect.charAt(0).toUpperCase() + parsed.effect.slice(1);
+        setAgentSay(
+          targets.length > 1
+            ? `${label} is now ${value}% on every clip.`
+            : `${label} on ${selected.name} is now ${value}%.`,
+        );
+        return;
+      }
+      case "reset-effects": {
+        if (!clips.length) return setAgentSay("Import a video first.");
+        const targets = parsed.scope === "all" || !selected ? packed.map((c) => c.id) : [selected.id];
+        let next = clips;
+        for (const id of targets) {
+          next = setClipEffects(next, id, { brightness: 100, contrast: 100, saturation: 100 });
+        }
+        setClips(next);
+        setAgentSay(targets.length > 1 ? "Colours back to normal on every clip." : `Colours back to normal on ${selected.name}.`);
+        return;
+      }
       case "add-music":
         musicInputRef.current?.click();
         setAgentSay("Pick a music file and I will add it under your video.");
@@ -686,7 +722,9 @@ export default function App() {
             alpha = Math.min(alpha, Math.max(0, (clipStart + clipLen - t) / clip.fadeOut));
           }
           ctx.globalAlpha = alpha;
+          ctx.filter = clipFilter(clip);
           ctx.drawImage(video, (width - dw) / 2, (height - dh) / 2, dw, dh);
+          ctx.filter = "none";
           ctx.globalAlpha = 1;
           for (const o of overlays) {
             if (t < o.start || t >= o.end) continue;
@@ -782,7 +820,12 @@ export default function App() {
           <div className={`preview-wrap ${vertical ? "vertical" : ""}`}>
             {currentClip ? (
               <>
-                <video ref={videoRef} playsInline preload="auto" />
+                <video
+                  ref={videoRef}
+                  playsInline
+                  preload="auto"
+                  style={{ filter: currentClip ? clipFilter(currentClip) : "none" }}
+                />
                 {activeOverlays.map((o) => (
                   <div
                     key={o.id}
@@ -951,9 +994,54 @@ export default function App() {
                     onChange={(e) => updateClip(selected.id, { fadeOut: parseFloat(e.target.value) })}
                   />
                 </label>
+                <label>
+                  Brightness: {normaliseEffects(selected.effects).brightness}%
+                  <input
+                    type="range"
+                    min={0}
+                    max={200}
+                    step={5}
+                    value={normaliseEffects(selected.effects).brightness}
+                    onChange={(e) =>
+                      updateClip(selected.id, {
+                        effects: { ...normaliseEffects(selected.effects), brightness: parseFloat(e.target.value) },
+                      })
+                    }
+                  />
+                </label>
+                <label>
+                  Contrast: {normaliseEffects(selected.effects).contrast}%
+                  <input
+                    type="range"
+                    min={0}
+                    max={200}
+                    step={5}
+                    value={normaliseEffects(selected.effects).contrast}
+                    onChange={(e) =>
+                      updateClip(selected.id, {
+                        effects: { ...normaliseEffects(selected.effects), contrast: parseFloat(e.target.value) },
+                      })
+                    }
+                  />
+                </label>
+                <label>
+                  Saturation: {normaliseEffects(selected.effects).saturation}%
+                  <input
+                    type="range"
+                    min={0}
+                    max={200}
+                    step={5}
+                    value={normaliseEffects(selected.effects).saturation}
+                    onChange={(e) =>
+                      updateClip(selected.id, {
+                        effects: { ...normaliseEffects(selected.effects), saturation: parseFloat(e.target.value) },
+                      })
+                    }
+                  />
+                </label>
               </>
             ) : (
-              <p className="hint">Click a clip on the timeline to change its speed, volume and fades.</p>
+              <p className="hint">Click a clip on the timeline to change its speed, volume, fades and colours.</p>
             )}
           </div>
 

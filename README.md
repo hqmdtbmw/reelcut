@@ -6,7 +6,7 @@ I kept watching friends open a video editor, stare at the timeline, and close it
 
 ## What it is
 
-- A web app you open in your browser. Import clips, preview, trim, split, reorder, add text and captions, change speed and volume, add fades, then export a video file.
+- A web app you open in your browser. Import clips, preview, trim, split, reorder, add text and captions, change speed and volume, add fades, fix the colours, then export a video file.
 - An agent bar. Type "remove the silences" or "make it vertical" and the timeline changes. It tells you what it did in plain words.
 - A Rust core (`core/`) that holds the timeline engine: trim, split, delete, reorder, speed, silence detection, caption timing. The same core is compiled to WebAssembly for the browser and will drive the Linux, Windows and iOS shells later.
 
@@ -50,6 +50,7 @@ wasm-pack build --target web --out-dir ../web/src/wasm --out-name reelcut-core
 - Text overlays with position and timing, captions you can type or dictate while the video plays (Chrome only).
 - Agent bar: remove the silences, cut the boring parts, add captions, cut the first seconds, make a 30 second cutdown, make it vertical or horizontal, speed the whole thing up or down, split at a time, delete a clip, add text, mute, set volume, add fades, add music.
 - Background music: pick an audio file and it plays under your video while you preview, looping to fill the edit. You can change its volume or take it out, and the export mixes it in with the clip audio.
+- Colour controls on every clip: brightness, contrast and saturation from 0 to 200 percent, 100 is untouched. You see them live in the preview and they are baked into the export. Tell the agent "make it brighter" or "turn the saturation down" and it changes the selected clip, or all of them if you say so.
 - Silence removal reads the real audio of your clips, finds the quiet stretches with the Rust core (WebAssembly when it loads, JavaScript mirror otherwise), and cuts them out.
 - Cutting the boring parts uses your captions: it finds the gaps longer than 3 seconds where nobody says anything and cuts them out, leaving half a second of breathing room on each side. Your captions and text overlays move with the cuts.
 - Export renders the full sequence to a webm file through canvas and MediaRecorder, with overlays, captions, fades and audio.
@@ -60,7 +61,6 @@ wasm-pack build --target web --out-dir ../web/src/wasm --out-name reelcut-core
 - Auto captions from the audio itself, on device, instead of dictation.
 - Native shells for Linux, Windows and iOS using the same Rust core.
 - Multi-track timeline with a separate audio track.
-- Real-time preview effects and colour controls.
 
 ## What it can't do yet
 

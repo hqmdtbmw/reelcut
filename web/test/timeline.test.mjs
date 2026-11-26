@@ -1,9 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  adjustClipEffect,
   boringRanges,
+  clampEffect,
   clampMusicVolume,
   clipDuration,
+  clipFilter,
   cutRange,
   cutdown,
   deleteClip,
@@ -14,7 +17,9 @@ import {
   moveClip,
   musicLastLoopLength,
   musicLoops,
+  normaliseEffects,
   packClips,
+  setClipEffects,
   shiftTimedItems,
   splitClip,
   totalDuration,
@@ -195,4 +200,47 @@ test("music last loop is the leftover", () => {
   assert.equal(musicLastLoopLength(120, 45), 45);
   assert.equal(musicLastLoopLength(30, 90), 30);
   assert.equal(musicLastLoopLength(0, 45), 0);
+});
+
+test("new clips start with untouched colours", () => {
+  const clip = makeClip("a", "a.mp4", null, 10);
+  assert.deepEqual(clip.effects, { brightness: 100, contrast: 100, saturation: 100 });
+});
+
+test("effect values clamp to 0 to 200", () => {
+  assert.equal(clampEffect(120), 120);
+  assert.equal(clampEffect(0), 0);
+  assert.equal(clampEffect(200), 200);
+  assert.equal(clampEffect(250), 200);
+  assert.equal(clampEffect(-10), 0);
+  assert.equal(clampEffect(NaN), 100);
+  assert.equal(clampEffect(undefined), 100);
+});
+
+test("normaliseEffects fills in missing values and clamps the rest", () => {
+  assert.deepEqual(normaliseEffects({ brightness: 150 }), { brightness: 150, contrast: 100, saturation: 100 });
+  assert.deepEqual(normaliseEffects({ saturation: 300 }), { brightness: 100, contrast: 100, saturation: 200 });
+  assert.deepEqual(normaliseEffects(null), { brightness: 100, contrast: 100, saturation: 100 });
+});
+
+test("clip filter string is none when untouched", () => {
+  assert.equal(clipFilter(makeClip("a", "a.mp4", null, 10)), "none");
+  const clip = makeClip("a", "a.mp4", null, 10);
+  clip.effects = { brightness: 120, contrast: 90, saturation: 110 };
+  assert.equal(clipFilter(clip), "brightness(120%) contrast(90%) saturate(110%)");
+});
+
+test("setClipEffects changes one clip and leaves the rest alone", () => {
+  const out = setClipEffects(twoClips(), "a", { brightness: 130 });
+  assert.deepEqual(out[0].effects, { brightness: 130, contrast: 100, saturation: 100 });
+  assert.deepEqual(out[1].effects, { brightness: 100, contrast: 100, saturation: 100 });
+});
+
+test("adjustClipEffect moves one value and clamps at the ends", () => {
+  const up = adjustClipEffect(twoClips(), "a", "brightness", 20);
+  assert.equal(up[0].effects.brightness, 120);
+  const over = adjustClipEffect(up, "a", "brightness", 200);
+  assert.equal(over[0].effects.brightness, 200);
+  const under = adjustClipEffect(twoClips(), "a", "saturation", -150);
+  assert.equal(under[0].effects.saturation, 0);
 });

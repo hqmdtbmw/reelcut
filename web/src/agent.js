@@ -18,6 +18,8 @@
 //   { kind: "add-music" }
 //   { kind: "remove-music" }
 //   { kind: "set-music-volume", volume }
+//   { kind: "set-effect", effect, mode, value, scope }
+//   { kind: "reset-effects", scope }
 //   { kind: "unknown", text }
 //
 // context is { clipCount, duration } so the parser can sanity check
@@ -136,6 +138,30 @@ export function parseCommand(rawText, context = {}) {
     return { kind: "fade-all", seconds: fade[1] ? parseFloat(fade[1]) : 0.5 };
   }
 
+  // Colour effects: "make it brighter", "more contrast",
+  // "turn the saturation down", "set brightness to 150%".
+  // A plain word moves the value 20 points, a number sets the step.
+  // "all clips", "every clip" or "the whole thing" targets every
+  // clip, otherwise the selected one.
+  const scope = /all clips|every clip|the whole (?:thing|video)|everything/.test(text) ? "all" : "selected";
+  if (/reset (?:the )?(colou?rs?|effects?)/.test(text)) {
+    return { kind: "reset-effects", scope };
+  }
+  let effect = null;
+  if (/bright|dark/.test(text)) effect = "brightness";
+  else if (/contrast/.test(text)) effect = "contrast";
+  else if (/saturat/.test(text)) effect = "saturation";
+  if (effect) {
+    const setMatch = text.match(/(?:set|make) (?:the )?(\w+)(?: to)? (\d+)\s*(?:%|percent)?/);
+    if (setMatch && setMatch[1] === effect) {
+      return { kind: "set-effect", effect, mode: "set", value: Math.min(200, parseInt(setMatch[2], 10)), scope };
+    }
+    const down = /darker|dimmer|\bdown\b|less|lower|decreas|reduc/.test(text);
+    const stepMatch = text.match(/(\d+)\s*(?:%|percent)/);
+    const step = stepMatch ? parseInt(stepMatch[1], 10) : 20;
+    return { kind: "set-effect", effect, mode: "delta", value: down ? -step : step, scope };
+  }
+
   return { kind: "unknown", text: rawText };
 }
 
@@ -151,5 +177,6 @@ export const EXAMPLE_COMMANDS = [
   "split at 10 seconds",
   "add text hello world from 2 to 5",
   "mute it",
+  "make it brighter",
   "add music",
 ];

@@ -15,7 +15,56 @@ export function makeClip(id, name, url, sourceDuration) {
     volume: 1,
     fadeIn: 0,
     fadeOut: 0,
+    effects: { brightness: 100, contrast: 100, saturation: 100 },
   };
+}
+
+// Colour effects. Each clip carries its own brightness, contrast and
+// saturation, 0 to 200 percent, 100 is untouched. The preview applies
+// them with a CSS filter on the video element, the export with
+// ctx.filter when it draws each frame.
+
+// Clamp one effect value to the 0 to 200 range. Bad input falls back
+// to 100, the untouched value.
+export function clampEffect(value) {
+  if (!Number.isFinite(value)) return 100;
+  return Math.min(200, Math.max(0, value));
+}
+
+// Fill in missing effect values and clamp the rest, so a clip loaded
+// from an old save or a partial patch still has all three.
+export function normaliseEffects(effects) {
+  const e = effects || {};
+  return {
+    brightness: clampEffect(e.brightness),
+    contrast: clampEffect(e.contrast),
+    saturation: clampEffect(e.saturation),
+  };
+}
+
+// The CSS filter string for a clip, or "none" when it is untouched.
+// The same string works for canvas ctx.filter at export time.
+export function clipFilter(clip) {
+  const e = normaliseEffects(clip.effects);
+  if (e.brightness === 100 && e.contrast === 100 && e.saturation === 100) return "none";
+  return `brightness(${e.brightness}%) contrast(${e.contrast}%) saturate(${e.saturation}%)`;
+}
+
+// Set one or more effect values on a clip, leaving the rest alone.
+export function setClipEffects(clips, id, patch) {
+  return clips.map((c) => {
+    if (c.id !== id) return c;
+    return { ...c, effects: normaliseEffects({ ...normaliseEffects(c.effects), ...patch }) };
+  });
+}
+
+// Move one effect value up or down by a step, clamped to 0 to 200.
+export function adjustClipEffect(clips, id, key, delta) {
+  return clips.map((c) => {
+    if (c.id !== id) return c;
+    const e = normaliseEffects(c.effects);
+    return { ...c, effects: { ...e, [key]: clampEffect(e[key] + delta) } };
+  });
 }
 
 export function clipDuration(clip) {

@@ -77,6 +77,60 @@ test("music commands", () => {
   assert.deepEqual(parseCommand("turn the music up"), { kind: "set-music-volume", volume: 0.75 });
 });
 
+test("colour commands", () => {
+  assert.deepEqual(parseCommand("make it brighter"), {
+    kind: "set-effect",
+    effect: "brightness",
+    mode: "delta",
+    value: 20,
+    scope: "selected",
+  });
+  assert.deepEqual(parseCommand("make it brighter 30%"), {
+    kind: "set-effect",
+    effect: "brightness",
+    mode: "delta",
+    value: 30,
+    scope: "selected",
+  });
+  assert.deepEqual(parseCommand("more contrast"), {
+    kind: "set-effect",
+    effect: "contrast",
+    mode: "delta",
+    value: 20,
+    scope: "selected",
+  });
+  assert.deepEqual(parseCommand("turn the saturation down"), {
+    kind: "set-effect",
+    effect: "saturation",
+    mode: "delta",
+    value: -20,
+    scope: "selected",
+  });
+  assert.deepEqual(parseCommand("make it darker"), {
+    kind: "set-effect",
+    effect: "brightness",
+    mode: "delta",
+    value: -20,
+    scope: "selected",
+  });
+  assert.deepEqual(parseCommand("set brightness to 150%"), {
+    kind: "set-effect",
+    effect: "brightness",
+    mode: "set",
+    value: 150,
+    scope: "selected",
+  });
+  assert.deepEqual(parseCommand("make it brighter, all clips"), {
+    kind: "set-effect",
+    effect: "brightness",
+    mode: "delta",
+    value: 20,
+    scope: "all",
+  });
+  assert.deepEqual(parseCommand("reset the colours"), { kind: "reset-effects", scope: "selected" });
+  assert.deepEqual(parseCommand("reset the colours on all clips"), { kind: "reset-effects", scope: "all" });
+});
+
 test("unknown commands stay unknown", () => {
   const parsed = parseCommand("do something magical");
   assert.equal(parsed.kind, "unknown");
