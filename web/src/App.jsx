@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  clampMusicVolume,
   clipAtTime,
   clipDuration,
   cutRange,
@@ -41,10 +42,15 @@ export default function App() {
   const [exportProgress, setExportProgress] = useState(null);
   const [overlayDraft, setOverlayDraft] = useState({ text: "", start: 0, end: 3, position: "Bottom" });
   const [captionDraft, setCaptionDraft] = useState({ text: "", start: 0, end: 3 });
+  const [music, setMusic] = useState(null);
 
   const videoRef = useRef(null);
   const trackRef = useRef(null);
   const wasmRef = useRef(null);
+  const musicInputRef = useRef(null);
+  const musicAudioRef = useRef(null);
+  const musicRef = useRef(null);
+  musicRef.current = music;
   const [wasmReady, setWasmReady] = useState(false);
   const playheadRef = useRef(0);
   playheadRef.current = playhead;
@@ -79,6 +85,45 @@ export default function App() {
       alive = false;
     };
   }, []);
+
+  // Keep the background music on the right track and volume.
+  // The audio element loops, so a short song covers a long edit.
+  useEffect(() => {
+    if (!musicAudioRef.current) {
+      musicAudioRef.current = new Audio();
+      musicAudioRef.current.loop = true;
+    }
+    const audio = musicAudioRef.current;
+    if (!music) {
+      audio.pause();
+      audio.removeAttribute("src");
+      return;
+    }
+    if (audio.dataset.track !== music.url) {
+      audio.dataset.track = music.url;
+      audio.src = music.url;
+    }
+    audio.volume = clampMusicVolume(music.volume);
+  }, [music]);
+
+  // Start and stop the music with the preview, from the playhead.
+  useEffect(() => {
+    const audio = musicAudioRef.current;
+    if (!audio || !music) return;
+    if (playing) {
+      audio.currentTime = music.duration > 0 ? playheadRef.current % music.duration : playheadRef.current;
+      audio.play().catch(() => {});
+    } else {
+      audio.pause();
+    }
+  }, [playing, music]);
+
+  // Scrubbing while paused moves the music to match the playhead.
+  useEffect(() => {
+    const audio = musicAudioRef.current;
+    if (!audio || !music || playing) return;
+    audio.currentTime = music.duration > 0 ? playhead % music.duration : playhead;
+  }, [playhead, music, playing]);
 
   // Keep the preview video on the right clip and the right source time.
   useEffect(() => {
@@ -148,6 +193,11 @@ export default function App() {
     const t = Math.max(0, Math.min(total, time));
     setPlayhead(t);
     if (videoRef.current) videoRef.current.style.opacity = "1";
+    const audio = musicAudioRef.current;
+    if (audio && musicRef.current) {
+      audio.currentTime =
+        musicRef.current.duration > 0 ? t % musicRef.current.duration : t;
+    }
   }
 
   function updateClip(id, patch) {
@@ -179,6 +229,37 @@ export default function App() {
       setSelectedId(clip.id);
     }
     setAgentSay(`Imported ${videos.length} clip${videos.length > 1 ? "s" : ""}. Press play to watch, or drag the clip edges to trim.`);
+  }
+
+  async function importMusic(files) {
+    const file = Array.from(files).find((f) => f.type.startsWith("audio/"));
+    if (!file) {
+      setAgentSay("That file is not audio. Try an mp3, wav or ogg file.");
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    const duration = await new Promise((resolve) => {
+      const probe = document.createElement("audio");
+      probe.preload = "metadata";
+      probe.onloadedmetadata = () => resolve(probe.duration || 0);
+      probe.onerror = () => resolve(0);
+      probe.src = url;
+    });
+    if (!duration) {
+      setAgentSay(`I could not read ${file.name}. It may be a format this browser cannot play.`);
+      return;
+    }
+    setMusic({ name: file.name, url, volume: 0.5, duration, file });
+    setAgentSay(`Added ${file.name} as background music. It will loop under your video.`);
+  }
+
+  function removeMusic() {
+    if (!music) {
+      setAgentSay("There is no music yet. Add some first and then I can take it out.");
+      return;
+    }
+    setMusic(null);
+    setAgentSay("Removed the music.");
   }
 
   function splitAtPlayhead() {
@@ -435,6 +516,21 @@ export default function App() {
         setClips(clips.map((c) => ({ ...c, fadeIn: parsed.seconds, fadeOut: parsed.seconds })));
         setAgentSay(`Added a ${parsed.seconds} second fade at the start and end of every clip.`);
         return;
+      case "add-music":
+        musicInputRef.current?.click();
+        setAgentSay("Pick a music file and I will add it under your video.");
+        return;
+      case "remove-music":
+        removeMusic();
+        return;
+      case "set-music-volume":
+        if (!music) {
+          setAgentSay("There is no music yet, so there is no music volume to change. Add some music first.");
+          return;
+        }
+        setMusic({ ...music, volume: parsed.volume });
+        setAgentSay(`Music volume set to ${Math.round(parsed.volume * 100)} percent.`);
+        return;
       default:
         setAgentSay(`I did not understand "${text}". Try one of these: ${EXAMPLE_COMMANDS.slice(0, 4).join(", ")}.`);
     }
@@ -458,20 +554,55 @@ export default function App() {
     video.muted = false;
     video.crossOrigin = "anonymous";
     let audioTrack = null;
-    try {
-      const probe = document.createElement("video");
-      probe.src = packed[0].url;
-      probe.muted = false;
-      await new Promise((resolve) => {
-        probe.onloadedmetadata = resolve;
-        probe.onerror = resolve;
-      });
-      const tracks = probe.captureStream ? probe.captureStream().getAudioTracks() : [];
-      audioTrack = tracks[0] || null;
-    } catch {
-      audioTrack = null;
+    let mixCtx = null;
+    let musicSource = null;
+    let clipGainNode = null;
+    if (music) {
+      // Mix the music with the clip audio in an AudioContext, so the
+      // export has one audio track with both. The music loops to cover
+      // the whole edit, and the clip gain follows each clip's volume.
+      try {
+        mixCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const buf = await music.file.arrayBuffer();
+        const decoded = await mixCtx.decodeAudioData(buf);
+        musicSource = mixCtx.createBufferSource();
+        musicSource.buffer = decoded;
+        musicSource.loop = true;
+        const musicGain = mixCtx.createGain();
+        musicGain.gain.value = clampMusicVolume(music.volume);
+        const dest = mixCtx.createMediaStreamDestination();
+        const elementSource = mixCtx.createMediaElementSource(video);
+        clipGainNode = mixCtx.createGain();
+        clipGainNode.gain.value = packed[0].volume;
+        elementSource.connect(clipGainNode);
+        clipGainNode.connect(dest);
+        musicSource.connect(musicGain);
+        musicGain.connect(dest);
+        musicSource.start();
+        const mixedTrack = dest.stream.getAudioTracks()[0];
+        if (mixedTrack) stream.addTrack(mixedTrack);
+      } catch {
+        mixCtx = null;
+        musicSource = null;
+        clipGainNode = null;
+      }
     }
-    if (audioTrack) stream.addTrack(audioTrack);
+    if (!mixCtx) {
+      try {
+        const probe = document.createElement("video");
+        probe.src = packed[0].url;
+        probe.muted = false;
+        await new Promise((resolve) => {
+          probe.onloadedmetadata = resolve;
+          probe.onerror = resolve;
+        });
+        const tracks = probe.captureStream ? probe.captureStream().getAudioTracks() : [];
+        audioTrack = tracks[0] || null;
+      } catch {
+        audioTrack = null;
+      }
+      if (audioTrack) stream.addTrack(audioTrack);
+    }
     const mime = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
       ? "video/webm;codecs=vp9,opus"
       : "video/webm";
@@ -495,7 +626,8 @@ export default function App() {
       for (const clip of packed) {
         video.src = clip.url;
         video.playbackRate = clip.speed;
-        video.volume = clip.volume;
+        video.volume = mixCtx ? 1 : clip.volume;
+        if (clipGainNode) clipGainNode.gain.value = clip.volume;
         await waitFor(video, "loadedmetadata");
         video.currentTime = clip.sourceIn;
         await waitFor(video, "seeked");
@@ -548,6 +680,12 @@ export default function App() {
     } finally {
       recorder.stop();
       video.pause();
+      try {
+        musicSource?.stop();
+      } catch {
+        // Already stopped, nothing to do.
+      }
+      if (mixCtx) mixCtx.close().catch(() => {});
     }
     await done;
     const blob = new Blob(chunks, { type: "video/webm" });
@@ -779,6 +917,56 @@ export default function App() {
               </>
             ) : (
               <p className="hint">Click a clip on the timeline to change its speed, volume and fades.</p>
+            )}
+          </div>
+
+          <div className="panel">
+            <h2>Music</h2>
+            <input
+              type="file"
+              accept="audio/*"
+              ref={musicInputRef}
+              style={{ display: "none" }}
+              onChange={(e) => {
+                importMusic(e.target.files);
+                e.target.value = "";
+              }}
+            />
+            {music ? (
+              <>
+                <p>
+                  <strong>{music.name}</strong>
+                </p>
+                <p className="hint">
+                  {formatTime(music.duration)} long. It loops to fill the whole edit, and the export mixes it in.
+                </p>
+                <label>
+                  Volume: {Math.round(music.volume * 100)}%
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={music.volume}
+                    onChange={(e) => setMusic({ ...music, volume: parseFloat(e.target.value) })}
+                  />
+                </label>
+                <div className="row">
+                  <button type="button" onClick={() => musicInputRef.current?.click()}>
+                    Change music
+                  </button>
+                  <button type="button" onClick={removeMusic}>
+                    Remove music
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="hint">Add a song and it will play under your video, looping to fill the edit.</p>
+                <button type="button" className="primary" onClick={() => musicInputRef.current?.click()}>
+                  Add music
+                </button>
+              </>
             )}
           </div>
 

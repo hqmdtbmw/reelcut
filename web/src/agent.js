@@ -14,6 +14,9 @@
 //   { kind: "add-text", text, start, end }
 //   { kind: "mute" } | { kind: "set-volume", volume }
 //   { kind: "fade-all", seconds }
+//   { kind: "add-music" }
+//   { kind: "remove-music" }
+//   { kind: "set-music-volume", volume }
 //   { kind: "unknown", text }
 //
 // context is { clipCount, duration } so the parser can sanity check
@@ -94,6 +97,25 @@ export function parseCommand(rawText, context = {}) {
     };
   }
 
+  if (/add (?:some |a |the )?music/.test(text) || /add (?:a |some )?song/.test(text)) {
+    return { kind: "add-music" };
+  }
+
+  if (/music/.test(text) && /remov|take .* out|delete|drop|get rid/.test(text)) {
+    return { kind: "remove-music" };
+  }
+
+  const musicVolume = text.match(/music volume (?:to )?(\d{1,3})\s*(?:%|percent)?/);
+  if (musicVolume) {
+    return { kind: "set-music-volume", volume: Math.min(100, parseInt(musicVolume[1], 10)) / 100 };
+  }
+  if (/turn the music down/.test(text) || /music (?:quieter|down)/.test(text)) {
+    return { kind: "set-music-volume", volume: 0.25 };
+  }
+  if (/turn the music up/.test(text) || /music (?:louder|up)/.test(text)) {
+    return { kind: "set-music-volume", volume: 0.75 };
+  }
+
   if (/mute/.test(text)) {
     return { kind: "mute" };
   }
@@ -121,4 +143,5 @@ export const EXAMPLE_COMMANDS = [
   "split at 10 seconds",
   "add text hello world from 2 to 5",
   "mute it",
+  "add music",
 ];

@@ -197,3 +197,28 @@ export function formatTime(seconds) {
   const rest = (s % 60).toFixed(1).padStart(4, "0");
   return `${m}:${rest}`;
 }
+
+// Background music helpers. A music track loops to fill the edit, so
+// a short song can cover a long video and a long song is trimmed.
+
+// Clamp a music volume to the 0 to 1 range. Bad input falls back to full.
+export function clampMusicVolume(volume) {
+  if (!Number.isFinite(volume)) return 1;
+  return Math.min(1, Math.max(0, volume));
+}
+
+// How many full plays of a track it takes to cover an edit of a given
+// length. Zero when either length is missing.
+export function musicLoops(trackDuration, editDuration) {
+  if (trackDuration <= 0 || editDuration <= 0) return 0;
+  return Math.ceil(editDuration / trackDuration);
+}
+
+// How much of the track plays on its last, partial loop. When the track
+// is longer than the edit, the whole edit is the first loop, so the
+// answer is the edit length.
+export function musicLastLoopLength(trackDuration, editDuration) {
+  if (trackDuration <= 0 || editDuration <= 0) return 0;
+  const loops = musicLoops(trackDuration, editDuration);
+  return editDuration - (loops - 1) * trackDuration;
+}

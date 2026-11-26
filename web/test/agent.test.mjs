@@ -59,6 +59,17 @@ test("fades", () => {
   assert.deepEqual(parseCommand("add fades"), { kind: "fade-all", seconds: 0.5 });
 });
 
+test("music commands", () => {
+  assert.deepEqual(parseCommand("add music"), { kind: "add-music" });
+  assert.deepEqual(parseCommand("add a song"), { kind: "add-music" });
+  assert.deepEqual(parseCommand("remove the music"), { kind: "remove-music" });
+  assert.deepEqual(parseCommand("take the music out"), { kind: "remove-music" });
+  assert.deepEqual(parseCommand("music volume 50%"), { kind: "set-music-volume", volume: 0.5 });
+  assert.deepEqual(parseCommand("set music volume to 25"), { kind: "set-music-volume", volume: 0.25 });
+  assert.deepEqual(parseCommand("turn the music down"), { kind: "set-music-volume", volume: 0.25 });
+  assert.deepEqual(parseCommand("turn the music up"), { kind: "set-music-volume", volume: 0.75 });
+});
+
 test("unknown commands stay unknown", () => {
   const parsed = parseCommand("do something magical");
   assert.equal(parsed.kind, "unknown");

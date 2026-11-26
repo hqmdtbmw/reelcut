@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  clampMusicVolume,
   clipDuration,
   cutRange,
   cutdown,
@@ -10,6 +11,8 @@ import {
   formatTime,
   makeClip,
   moveClip,
+  musicLastLoopLength,
+  musicLoops,
   packClips,
   splitClip,
   totalDuration,
@@ -123,4 +126,28 @@ test("formatTime reads like a clock", () => {
   assert.equal(formatTime(0), "0:00.0");
   assert.equal(formatTime(65.5), "1:05.5");
   assert.equal(formatTime(125), "2:05.0");
+});
+
+test("music volume clamps to 0 to 1", () => {
+  assert.equal(clampMusicVolume(0.5), 0.5);
+  assert.equal(clampMusicVolume(2), 1);
+  assert.equal(clampMusicVolume(-1), 0);
+  assert.equal(clampMusicVolume(0), 0);
+  assert.equal(clampMusicVolume(NaN), 1);
+  assert.equal(clampMusicVolume(undefined), 1);
+});
+
+test("music loops cover the edit", () => {
+  assert.equal(musicLoops(30, 90), 3);
+  assert.equal(musicLoops(30, 95), 4);
+  assert.equal(musicLoops(120, 45), 1);
+  assert.equal(musicLoops(0, 45), 0);
+  assert.equal(musicLoops(30, 0), 0);
+});
+
+test("music last loop is the leftover", () => {
+  assert.equal(musicLastLoopLength(30, 95), 5);
+  assert.equal(musicLastLoopLength(120, 45), 45);
+  assert.equal(musicLastLoopLength(30, 90), 30);
+  assert.equal(musicLastLoopLength(0, 45), 0);
 });
