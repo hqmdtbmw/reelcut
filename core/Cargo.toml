@@ -1,0 +1,19 @@
+[package]
+name = "reelcut-core"
+version = "0.1.0"
+edition = "2021"
+description = "Timeline engine for reelcut, a video editor that edits itself"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wasm-bindgen = "0.2"
+
+# wasm-opt needs a download from GitHub releases, which is not always
+# reachable here, and the module works fine without it.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

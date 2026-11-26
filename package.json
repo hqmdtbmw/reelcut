@@ -1,0 +1,1 @@
+{"description":"The video editor that edits itself. Free, no paywall, Rust core plus React web app.","license":"MIT","name":"reelcut","private":true,"scripts":{"test:core":"cargo test --manifest-path core/Cargo.toml","test:web":"npm --prefix web test"},"version":"0.1.0"}

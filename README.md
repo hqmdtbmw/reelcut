@@ -1,0 +1,78 @@
+# reelcut
+
+The video editor that edits itself.
+
+I kept watching friends open a video editor, stare at the timeline, and close it again. The tools are powerful but they ask a lot from you before you get anything done. reelcut is my answer to that: import a video, tell it what you want in plain words, and it does the edit. No account, no subscription, no feature locked behind a paywall. Everything CapCut charges for is in here for free: silence removal, captions, speed, fades, text, vertical export.
+
+## What it is
+
+- A web app you open in your browser. Import clips, preview, trim, split, reorder, add text and captions, change speed and volume, add fades, then export a video file.
+- An agent bar. Type "remove the silences" or "make it vertical" and the timeline changes. It tells you what it did in plain words.
+- A Rust core (`core/`) that holds the timeline engine: trim, split, delete, reorder, speed, silence detection, caption timing. The same core is compiled to WebAssembly for the browser and will drive the Linux, Windows and iOS shells later.
+
+## How to run it
+
+You need Node 20 or newer and a Rust toolchain.
+
+```bash
+# web app
+cd web
+npm install
+npm run dev
+```
+
+Open http://localhost:5173. Import a video file and start editing. To build the production version:
+
+```bash
+cd web
+npm run build
+npm run preview
+```
+
+To run the Rust core tests:
+
+```bash
+cd core
+cargo test
+```
+
+To rebuild the WebAssembly module after changing the Rust code:
+
+```bash
+cd core
+wasm-pack build --target web --out-dir ../web/src/wasm --out-name reelcut-core
+```
+
+## What works now
+
+- Import one or more video files, preview with play and pause.
+- Timeline with trim by dragging clip edges, split at the playhead, delete, reorder, speed, volume, fade in and out.
+- Text overlays with position and timing, captions you can type or dictate while the video plays (Chrome only).
+- Agent bar: remove the silences, add captions, cut the first seconds, make it vertical or horizontal, speed the whole thing up or down, split at a time, delete a clip, add text, mute, set volume, add fades.
+- Silence removal reads the real audio of your clips, finds the quiet stretches with the Rust core (WebAssembly when it loads, JavaScript mirror otherwise), and cuts them out.
+- Export renders the full sequence to a webm file through canvas and MediaRecorder, with overlays, captions, fades and audio.
+- Vertical 9:16 and horizontal 16:9 output.
+
+## What is next
+
+- Auto captions from the audio itself, on device, instead of dictation.
+- More agent commands: "cut the boring parts", "add music", "make a 30 second cutdown".
+- Native shells for Linux, Windows and iOS using the same Rust core.
+- Multi-track timeline with a separate audio track.
+- Real-time preview effects and colour controls.
+
+## Honest limits
+
+- Export is webm (VP9/Opus). MP4 export needs a native encoder and comes with the desktop shell.
+- Caption dictation listens through your microphone while the video plays, so it needs a quiet room and only works in Chrome. Typed captions work everywhere.
+- Silence removal needs an audio track in the clip. A clip with no audio has nothing to remove.
+- Everything runs on your machine. Large files use a lot of memory while exporting.
+- The editor is a first version. It handles one video track, which is enough for most short videos, but it is not a replacement for a full multi-track suite yet.
+
+## Contributing
+
+See CONTRIBUTING.md. Short version: fork it, make the change, add a test, open a pull request. Every change gets reviewed by a human.
+
+## License
+
+MIT. See LICENSE.
