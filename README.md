@@ -47,6 +47,7 @@ wasm-pack build --target web --out-dir ../web/src/wasm --out-name reelcut-core
 
 - Import one or more video files, preview with play and pause.
 - Timeline with trim by dragging clip edges, split at the playhead, delete, reorder, speed, volume, fade in and out.
+- Undo and redo for every timeline edit, with buttons by the timeline and keyboard shortcuts: Space plays or pauses, S splits at the playhead, Delete removes the selected clip, Ctrl+Z undoes, Ctrl+Shift+Z redoes. The shortcuts stay quiet while you type in a field.
 - Text overlays with position and timing, captions you can type or dictate while the video plays (Chrome only).
 - Agent bar: remove the silences, cut the boring parts, add captions, cut the first seconds, make a 30 second cutdown, make it vertical or horizontal, speed the whole thing up or down, split at a time, delete a clip, add text, mute, set volume, add fades, add music.
 - Background music: pick an audio file and it plays under your video while you preview, looping to fill the edit. You can change its volume or take it out, and the export mixes it in with the clip audio.

@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
   adjustClipEffect,
   boringRanges,
+  canRedo,
+  canUndo,
   clampEffect,
   clampMusicVolume,
   clipDuration,
@@ -14,16 +16,22 @@ import {
   captionsFromWords,
   formatTime,
   makeClip,
+  makeHistory,
   moveClip,
   musicLastLoopLength,
   musicLoops,
   normaliseEffects,
   packClips,
+  pushHistory,
+  redoHistory,
   setClipEffects,
   shiftTimedItems,
+  shortcutForEvent,
+  snapshotState,
   splitClip,
   totalDuration,
   trimClip,
+  undoHistory,
 } from "../src/timeline.js";
 
 function twoClips() {
@@ -243,4 +251,114 @@ test("adjustClipEffect moves one value and clamps at the ends", () => {
   assert.equal(over[0].effects.brightness, 200);
   const under = adjustClipEffect(twoClips(), "a", "saturation", -150);
   assert.equal(under[0].effects.saturation, 0);
+});
+
+// Undo and redo, worked through the history helpers directly.
+
+function editState(clips, overlays = [], captions = [], music = null) {
+  return snapshotState({ clips, overlays, captions, music });
+}
+
+test("undo returns the previous state and redo reapplies", () => {
+  let history = makeHistory();
+  const first = editState(twoClips());
+  const second = editState(deleteClip(twoClips(), "a"));
+  history = pushHistory(history, first);
+  assert.equal(canUndo(history), true);
+  assert.equal(canRedo(history), false);
+
+  const undone = undoHistory(history, second);
+  assert.deepEqual(undone.state.clips, first.clips);
+  assert.equal(canUndo(undone.history), false);
+  assert.equal(canRedo(undone.history), true);
+
+  const redone = redoHistory(undone.history, undone.state);
+  assert.deepEqual(redone.state.clips, second.clips);
+  assert.equal(canRedo(redone.history), false);
+});
+
+test("undo and redo do nothing when their stack is empty", () => {
+  const history = makeHistory();
+  assert.equal(undoHistory(history, editState(twoClips())), null);
+  assert.equal(redoHistory(history, editState(twoClips())), null);
+  assert.equal(canUndo(history), false);
+  assert.equal(canRedo(history), false);
+});
+
+test("pushing after undo clears the redo stack", () => {
+  let history = makeHistory();
+  const first = editState(twoClips());
+  const second = editState(deleteClip(twoClips(), "a"));
+  const third = editState(moveClip(twoClips(), "b", 0));
+  history = pushHistory(history, first);
+  const undone = undoHistory(history, second);
+  history = pushHistory(undone.history, undone.state);
+  assert.equal(canRedo(history), false);
+  const undoneAgain = undoHistory(history, third);
+  assert.deepEqual(undoneAgain.state.clips, first.clips);
+});
+
+test("history keeps the last 50 edits and drops older ones", () => {
+  let history = makeHistory();
+  for (let i = 0; i < 60; i += 1) {
+    const state = editState([makeClip(`c${i}`, "c.mp4", null, 1)]);
+    history = pushHistory(history, state);
+  }
+  assert.equal(history.past.length, 50);
+  assert.equal(history.past[0].clips[0].id, "c10");
+  assert.equal(history.past[49].clips[0].id, "c59");
+});
+
+test("a snapshot covers clips, overlays, captions and music", () => {
+  const state = editState(
+    twoClips(),
+    [{ id: "t1", text: "hello", start: 0, end: 2 }],
+    [{ text: "hi", start: 0, end: 1 }],
+    { name: "song.mp3", volume: 0.5, duration: 30 },
+  );
+  let history = pushHistory(makeHistory(), state);
+  const changed = editState([], [], [], null);
+  const undone = undoHistory(history, changed);
+  assert.equal(undone.state.clips.length, 2);
+  assert.equal(undone.state.overlays[0].text, "hello");
+  assert.equal(undone.state.captions[0].text, "hi");
+  assert.equal(undone.state.music.name, "song.mp3");
+  history = undone.history;
+});
+
+test("snapshots do not share clip objects with the live edit", () => {
+  const clips = twoClips();
+  const state = editState(clips);
+  clips[0].effects.brightness = 150;
+  assert.equal(state.clips[0].effects.brightness, 100);
+});
+
+test("shortcuts map keys to actions", () => {
+  const body = { tagName: "DIV" };
+  assert.equal(shortcutForEvent({ key: " ", target: body }), "play");
+  assert.equal(shortcutForEvent({ key: "s", target: body }), "split");
+  assert.equal(shortcutForEvent({ key: "S", target: body }), "split");
+  assert.equal(shortcutForEvent({ key: "Delete", target: body }), "delete");
+  assert.equal(shortcutForEvent({ key: "Backspace", target: body }), "delete");
+  assert.equal(shortcutForEvent({ key: "z", ctrlKey: true, target: body }), "undo");
+  assert.equal(shortcutForEvent({ key: "Z", ctrlKey: true, shiftKey: true, target: body }), "redo");
+  assert.equal(shortcutForEvent({ key: "y", ctrlKey: true, target: body }), "redo");
+  assert.equal(shortcutForEvent({ key: "z", metaKey: true, target: body }), "undo");
+  assert.equal(shortcutForEvent({ key: "x", target: body }), null);
+  assert.equal(shortcutForEvent({ key: "z", ctrlKey: true, shiftKey: false, target: body }), "undo");
+});
+
+test("shortcuts stay quiet while typing", () => {
+  const input = { tagName: "INPUT" };
+  const textarea = { tagName: "TEXTAREA" };
+  assert.equal(shortcutForEvent({ key: " ", target: input }), null);
+  assert.equal(shortcutForEvent({ key: "s", target: textarea }), null);
+  assert.equal(shortcutForEvent({ key: "z", ctrlKey: true, target: input }), null);
+  assert.equal(shortcutForEvent({ key: "Delete", target: input }), null);
+});
+
+test("space on a focused button is left to the button", () => {
+  const button = { tagName: "BUTTON" };
+  assert.equal(shortcutForEvent({ key: " ", target: button }), null);
+  assert.equal(shortcutForEvent({ key: "s", target: button }), "split");
 });

@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   adjustClipEffect,
   boringRanges,
+  canRedo,
+  canUndo,
   clampMusicVolume,
   clipAtTime,
   clipDuration,
@@ -12,14 +14,20 @@ import {
   detectSilence,
   formatTime,
   makeClip,
+  makeHistory,
   moveClip,
   normaliseEffects,
   packClips,
+  pushHistory,
+  redoHistory,
   setClipEffects,
   shiftTimedItems,
+  shortcutForEvent,
+  snapshotState,
   splitClip,
   totalDuration,
   trimClip,
+  undoHistory,
 } from "./timeline.js";
 import { EXAMPLE_COMMANDS, parseCommand } from "./agent.js";
 
@@ -62,6 +70,15 @@ export default function App() {
   playheadRef.current = playhead;
   const clipsRef = useRef(clips);
   clipsRef.current = clips;
+  const overlaysRef = useRef(overlays);
+  overlaysRef.current = overlays;
+  const captionsRef = useRef(captions);
+  captionsRef.current = captions;
+  // Undo history. The ref holds the stacks, the version state only
+  // exists so the Undo and Redo buttons re-render when it changes.
+  const historyRef = useRef(makeHistory());
+  const lastPushRef = useRef(0);
+  const [historyVersion, setHistoryVersion] = useState(0);
 
   const packed = useMemo(() => packClips(clips), [clips]);
   const total = useMemo(() => totalDuration(clips), [clips]);
@@ -195,6 +212,93 @@ export default function App() {
     return () => cancelAnimationFrame(raf);
   }, [playing]);
 
+  // A snapshot of the edit as it is right now, for undo history.
+  function snapshotEdit() {
+    return snapshotState({
+      clips: clipsRef.current,
+      overlays: overlaysRef.current,
+      captions: captionsRef.current,
+      music: musicRef.current,
+    });
+  }
+
+  // Save the current edit before changing it, so undo can bring it
+  // back. Call this before the setState calls that make the change.
+  function recordHistory() {
+    historyRef.current = pushHistory(historyRef.current, snapshotEdit());
+    setHistoryVersion((v) => v + 1);
+  }
+
+  // Sliders fire on every tiny move, so one drag would fill the
+  // history with dozens of near-identical entries. This version only
+  // records when the last entry is more than a moment old, so a drag
+  // is one undo step and a fresh drag is another.
+  function recordSliderHistory() {
+    const now = Date.now();
+    if (now - lastPushRef.current < 800) return;
+    lastPushRef.current = now;
+    recordHistory();
+  }
+
+  function applySnapshot(state) {
+    setClips(state.clips);
+    setOverlays(state.overlays);
+    setCaptions(state.captions);
+    setMusic(state.music);
+    setSelectedId((prev) => (state.clips.some((c) => c.id === prev) ? prev : null));
+    setPlayhead((prev) => Math.min(prev, totalDuration(state.clips)));
+    setPlaying(false);
+  }
+
+  function doUndo() {
+    const result = undoHistory(historyRef.current, snapshotEdit());
+    if (!result) return;
+    historyRef.current = result.history;
+    applySnapshot(result.state);
+    setHistoryVersion((v) => v + 1);
+    setAgentSay("Undid that.");
+  }
+
+  function doRedo() {
+    const result = redoHistory(historyRef.current, snapshotEdit());
+    if (!result) return;
+    historyRef.current = result.history;
+    applySnapshot(result.state);
+    setHistoryVersion((v) => v + 1);
+    setAgentSay("Redid that.");
+  }
+
+  function updateClip(id, patch) {
+    recordSliderHistory();
+    setClips((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+  }
+
+  // Keyboard shortcuts live in a ref so the listener below never
+  // goes stale, it always calls the latest version of each action.
+  const actionsRef = useRef({});
+  actionsRef.current = {
+    togglePlay: () => setPlaying((p) => !p),
+    splitAtPlayhead,
+    deleteSelected,
+    doUndo,
+    doRedo,
+  };
+
+  useEffect(() => {
+    const onKey = (e) => {
+      const action = shortcutForEvent(e);
+      if (!action) return;
+      e.preventDefault();
+      if (action === "play") actionsRef.current.togglePlay();
+      else if (action === "split") actionsRef.current.splitAtPlayhead();
+      else if (action === "delete") actionsRef.current.deleteSelected();
+      else if (action === "undo") actionsRef.current.doUndo();
+      else if (action === "redo") actionsRef.current.doRedo();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   function seek(time) {
     const t = Math.max(0, Math.min(total, time));
     setPlayhead(t);
@@ -206,16 +310,13 @@ export default function App() {
     }
   }
 
-  function updateClip(id, patch) {
-    setClips((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
-  }
-
   async function importFiles(files) {
     const videos = Array.from(files).filter((f) => f.type.startsWith("video/"));
     if (!videos.length) {
       setAgentSay("Those files are not video. Try an mp4, mov or webm file.");
       return;
     }
+    recordHistory();
     for (const file of videos) {
       const url = URL.createObjectURL(file);
       const duration = await new Promise((resolve) => {
@@ -255,6 +356,7 @@ export default function App() {
       setAgentSay(`I could not read ${file.name}. It may be a format this browser cannot play.`);
       return;
     }
+    recordHistory();
     setMusic({ name: file.name, url, volume: 0.5, duration, file });
     setAgentSay(`Added ${file.name} as background music. It will loop under your video.`);
   }
@@ -264,6 +366,7 @@ export default function App() {
       setAgentSay("There is no music yet. Add some first and then I can take it out.");
       return;
     }
+    recordHistory();
     setMusic(null);
     setAgentSay("Removed the music.");
   }
@@ -275,12 +378,14 @@ export default function App() {
       setAgentSay("Move the playhead inside a clip to split it.");
       return;
     }
+    recordHistory();
     setClips(out);
     setAgentSay(`Split ${currentClip.name} at ${formatTime(playhead)}.`);
   }
 
   function deleteSelected() {
     if (!selected) return;
+    recordHistory();
     setClips(deleteClip(clips, selected.id));
     setSelectedId(null);
     setAgentSay(`Deleted ${selected.name}.`);
@@ -290,6 +395,8 @@ export default function App() {
     if (!selected) return;
     const idx = packed.findIndex((c) => c.id === selected.id);
     const next = moveClip(clips, selected.id, idx + direction);
+    if (next === clips) return;
+    recordHistory();
     setClips(next);
   }
 
@@ -298,6 +405,8 @@ export default function App() {
     e.stopPropagation();
     const track = trackRef.current;
     if (!track || total <= 0) return;
+    // One undo step for the whole drag, recorded before it starts.
+    recordHistory();
     const rect = track.getBoundingClientRect();
     const startX = e.clientX;
     const origIn = clip.sourceIn;
@@ -374,6 +483,7 @@ export default function App() {
       let next = clips;
       const sorted = [...allRanges].sort((a, b) => b.start - a.start);
       for (const r of sorted) next = cutRange(next, r.start, r.end);
+      recordHistory();
       setClips(next);
       seek(0);
       setAgentSay(`Removed ${allRanges.length} silent ${allRanges.length === 1 ? "stretch" : "stretches"}, ${removed.toFixed(1)} seconds in total. The edit is tighter now.`);
@@ -407,6 +517,7 @@ export default function App() {
     let next = clips;
     const sorted = [...ranges].sort((a, b) => b.start - a.start);
     for (const r of sorted) next = cutRange(next, r.start, r.end);
+    recordHistory();
     setClips(next);
     setCaptions((prev) => shiftTimedItems(prev, ranges));
     setOverlays((prev) => shiftTimedItems(prev, ranges));
@@ -438,6 +549,7 @@ export default function App() {
       const text = result[0].transcript.trim();
       if (!text) return;
       const t = playheadRef.current;
+      recordHistory();
       setCaptions((prev) => [...prev, { text, start: t, end: t + 2.5 }]);
     };
     rec.onend = () => {
@@ -479,6 +591,7 @@ export default function App() {
       case "cut-first": {
         if (!clips.length) return setAgentSay("Import a video first.");
         const seconds = Math.min(parsed.seconds, total);
+        recordHistory();
         setClips(cutRange(clips, 0, seconds));
         seek(0);
         setAgentSay(`Cut the first ${seconds} seconds.`);
@@ -490,6 +603,7 @@ export default function App() {
           setAgentSay(`It already runs ${total.toFixed(1)} seconds, shorter than ${parsed.seconds}. Nothing to cut.`);
           return;
         }
+        recordHistory();
         setClips(cutdown(clips, parsed.seconds));
         setOverlays((prev) =>
           prev
@@ -510,6 +624,7 @@ export default function App() {
         return;
       case "speed-all": {
         if (!clips.length) return setAgentSay("Import a video first.");
+        recordHistory();
         setClips(clips.map((c) => ({ ...c, speed: parsed.factor })));
         setAgentSay(`Sped the whole thing up to ${parsed.factor}x. It now runs ${totalDuration(clips.map((c) => ({ ...c, speed: parsed.factor })) ).toFixed(1)} seconds.`);
         return;
@@ -519,6 +634,7 @@ export default function App() {
         if (!clip) return setAgentSay(`There is no clip at ${parsed.seconds} seconds.`);
         const out = splitClip(clips, clip.id, parsed.seconds);
         if (!out) return setAgentSay("I could not split there.");
+        recordHistory();
         setClips(out);
         setAgentSay(`Split ${clip.name} at ${formatTime(parsed.seconds)}.`);
         return;
@@ -526,6 +642,7 @@ export default function App() {
       case "delete-clip": {
         const clip = packed[parsed.index];
         if (!clip) return setAgentSay(`There is no clip ${parsed.index + 1}. You have ${packed.length}.`);
+        recordHistory();
         setClips(deleteClip(clips, clip.id));
         setAgentSay(`Deleted clip ${parsed.index + 1}, ${clip.name}.`);
         return;
@@ -541,19 +658,23 @@ export default function App() {
           y: 0.85,
           size: 64,
         };
+        recordHistory();
         setOverlays((prev) => [...prev, overlay]);
         setAgentSay(`Added "${parsed.text}" from ${formatTime(parsed.start)} to ${formatTime(end)}.`);
         return;
       }
       case "mute":
+        recordHistory();
         setClips(clips.map((c) => ({ ...c, volume: 0 })));
         setAgentSay("Muted everything.");
         return;
       case "set-volume":
+        recordHistory();
         setClips(clips.map((c) => ({ ...c, volume: parsed.volume })));
         setAgentSay(`Volume set to ${Math.round(parsed.volume * 100)} percent.`);
         return;
       case "fade-all":
+        recordHistory();
         setClips(clips.map((c) => ({ ...c, fadeIn: parsed.seconds, fadeOut: parsed.seconds })));
         setAgentSay(`Added a ${parsed.seconds} second fade at the start and end of every clip.`);
         return;
@@ -567,6 +688,7 @@ export default function App() {
               ? setClipEffects(next, id, { [parsed.effect]: parsed.value })
               : adjustClipEffect(next, id, parsed.effect, parsed.value);
         }
+        recordHistory();
         setClips(next);
         const first = next.find((c) => c.id === targets[0]);
         const value = first ? normaliseEffects(first.effects)[parsed.effect] : 100;
@@ -585,6 +707,7 @@ export default function App() {
         for (const id of targets) {
           next = setClipEffects(next, id, { brightness: 100, contrast: 100, saturation: 100 });
         }
+        recordHistory();
         setClips(next);
         setAgentSay(targets.length > 1 ? "Colours back to normal on every clip." : `Colours back to normal on ${selected.name}.`);
         return;
@@ -601,6 +724,7 @@ export default function App() {
           setAgentSay("There is no music yet, so there is no music volume to change. Add some music first.");
           return;
         }
+        recordHistory();
         setMusic({ ...music, volume: parsed.volume });
         setAgentSay(`Music volume set to ${Math.round(parsed.volume * 100)} percent.`);
         return;
@@ -920,6 +1044,12 @@ export default function App() {
               )}
             </div>
             <div className="clip-actions">
+              <button type="button" onClick={doUndo} disabled={!canUndo(historyRef.current)}>
+                Undo
+              </button>
+              <button type="button" onClick={doRedo} disabled={!canRedo(historyRef.current)}>
+                Redo
+              </button>
               <button type="button" onClick={splitAtPlayhead} disabled={!currentClip}>
                 Split at playhead
               </button>
@@ -939,6 +1069,10 @@ export default function App() {
                 Stop listening
               </button>
             </div>
+            <p className="hint">
+              Shortcuts: Space plays or pauses, S splits at the playhead, Delete removes the selected clip, Ctrl+Z undoes,
+              Ctrl+Shift+Z redoes. Shortcuts stay quiet while you type.
+            </p>
           </div>
         </div>
 
@@ -1073,7 +1207,10 @@ export default function App() {
                     max={1}
                     step={0.05}
                     value={music.volume}
-                    onChange={(e) => setMusic({ ...music, volume: parseFloat(e.target.value) })}
+                    onChange={(e) => {
+                      recordSliderHistory();
+                      setMusic({ ...music, volume: parseFloat(e.target.value) });
+                    }}
                   />
                 </label>
                 <div className="row">
@@ -1145,6 +1282,7 @@ export default function App() {
                 className="primary"
                 disabled={!overlayDraft.text.trim()}
                 onClick={() => {
+                  recordHistory();
                   const pos = POSITIONS[overlayDraft.position];
                   setOverlays((prev) => [
                     ...prev,
@@ -1161,7 +1299,13 @@ export default function App() {
                 <span>
                   "{o.text}" · {formatTime(o.start)} to {formatTime(o.end)}
                 </span>
-                <button type="button" onClick={() => setOverlays(overlays.filter((x) => x.id !== o.id))}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    recordHistory();
+                    setOverlays(overlays.filter((x) => x.id !== o.id));
+                  }}
+                >
                   Remove
                 </button>
               </div>
@@ -1211,6 +1355,7 @@ export default function App() {
                 className="primary"
                 disabled={!captionDraft.text.trim()}
                 onClick={() => {
+                  recordHistory();
                   setCaptions((prev) => [...prev, { text: captionDraft.text.trim(), start: captionDraft.start, end: Math.max(captionDraft.end, captionDraft.start + 0.5) }]);
                   setCaptionDraft({ ...captionDraft, text: "" });
                 }}
@@ -1223,7 +1368,13 @@ export default function App() {
                 <span>
                   "{c.text}" · {formatTime(c.start)} to {formatTime(c.end)}
                 </span>
-                <button type="button" onClick={() => setCaptions(captions.filter((_, j) => j !== i))}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    recordHistory();
+                    setCaptions(captions.filter((_, j) => j !== i));
+                  }}
+                >
                   Remove
                 </button>
               </div>

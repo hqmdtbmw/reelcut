@@ -287,6 +287,88 @@ export function shiftTimedItems(items, ranges) {
   return out;
 }
 
+// Undo and redo. A history entry is a snapshot of the whole edit:
+// the clips, the text overlays, the captions and the music. Snapshots
+// copy the clip and overlay objects, but the music file itself is
+// shared by reference, since it is never changed in place. The
+// history keeps the last 50 edits, old ones drop off the front.
+
+export const HISTORY_LIMIT = 50;
+
+// A plain snapshot of the edit, safe to store and restore later.
+export function snapshotState(state) {
+  return {
+    clips: state.clips.map((c) => ({ ...c, effects: { ...c.effects } })),
+    overlays: state.overlays.map((o) => ({ ...o })),
+    captions: state.captions.map((c) => ({ ...c })),
+    music: state.music ? { ...state.music } : null,
+  };
+}
+
+export function makeHistory() {
+  return { past: [], future: [] };
+}
+
+// Record the state before an edit. A new edit wipes the redo stack,
+// since redo only makes sense until you do something different.
+export function pushHistory(history, state) {
+  const past = [...history.past, state];
+  if (past.length > HISTORY_LIMIT) {
+    past.splice(0, past.length - HISTORY_LIMIT);
+  }
+  return { past, future: [] };
+}
+
+// Step back one edit. Returns null when there is nothing to undo.
+// The state you pass in is the current one, it becomes the first
+// redo entry, so redo can bring it back.
+export function undoHistory(history, current) {
+  if (!history.past.length) return null;
+  const past = [...history.past];
+  const state = past.pop();
+  return { history: { past, future: [current, ...history.future] }, state };
+}
+
+// Step forward one edit. Returns null when there is nothing to redo.
+export function redoHistory(history, current) {
+  if (!history.future.length) return null;
+  const [state, ...future] = history.future;
+  return { history: { past: [...history.past, current], future }, state };
+}
+
+export function canUndo(history) {
+  return history.past.length > 0;
+}
+
+export function canRedo(history) {
+  return history.future.length > 0;
+}
+
+// Keyboard shortcuts. The event can be a real KeyboardEvent or a
+// plain object with the same fields, which keeps it testable.
+// Returns "play", "split", "delete", "undo", "redo" or null.
+// Shortcuts stay quiet while you type in a field, and Space on a
+// focused button is left alone so the button still works.
+export function shortcutForEvent(event) {
+  const target = event.target || {};
+  const tag = typeof target.tagName === "string" ? target.tagName.toLowerCase() : "";
+  if (tag === "input" || tag === "textarea" || tag === "select" || target.isContentEditable) {
+    return null;
+  }
+  const mod = event.ctrlKey || event.metaKey;
+  if (mod && !event.shiftKey && (event.key === "z" || event.key === "Z")) return "undo";
+  if (mod && (event.key === "y" || event.key === "Y")) return "redo";
+  if (mod && event.shiftKey && (event.key === "z" || event.key === "Z")) return "redo";
+  if (mod) return null;
+  if (event.key === " " || event.key === "Spacebar") {
+    if (tag === "button") return null;
+    return "play";
+  }
+  if (event.key === "s" || event.key === "S") return "split";
+  if (event.key === "Delete" || event.key === "Backspace") return "delete";
+  return null;
+}
+
 export function formatTime(seconds) {
   const s = Math.max(0, seconds);
   const m = Math.floor(s / 60);
