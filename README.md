@@ -61,7 +61,7 @@ wasm-pack build --target web --out-dir ../web/src/wasm --out-name reelcut-core
 - Multi-track timeline with a separate audio track.
 - Real-time preview effects and colour controls.
 
-## Honest limits
+## What it can't do yet
 
 - Export is webm (VP9/Opus). MP4 export needs a native encoder and comes with the desktop shell.
 - Caption dictation listens through your microphone while the video plays, so it needs a quiet room and only works in Chrome. Typed captions work everywhere.
