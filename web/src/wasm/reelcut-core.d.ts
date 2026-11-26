@@ -2,6 +2,13 @@
 /* eslint-disable */
 
 /**
+ * Find the boring parts of an edit from its captions, given as a
+ * JSON array of {text, start, end} lines and the total length in
+ * seconds. Returns a JSON array of {start, end} ranges.
+ */
+export function wasm_boring_ranges(captions_json: string, total: number): string;
+
+/**
  * Cut a time range out of a timeline given as JSON, and return the
  * new timeline as JSON. Returns an empty string when the input does
  * not parse.
@@ -31,6 +38,7 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly wasm_boring_ranges: (a: number, b: number, c: number) => [number, number];
     readonly wasm_cut_range: (a: number, b: number, c: number, d: number) => [number, number];
     readonly wasm_cutdown: (a: number, b: number, c: number) => [number, number];
     readonly wasm_detect_silence: (a: number, b: number, c: number, d: number, e: number) => [number, number];

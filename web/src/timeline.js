@@ -191,6 +191,53 @@ export function captionsFromWords(words) {
   return captions;
 }
 
+// Find the boring parts of an edit from its captions: the long gaps
+// where nobody says anything. A gap only counts when it is longer
+// than minGap seconds. Each cut leaves `keep` seconds of breathing
+// room on both sides so the edit does not sound chopped. The dead
+// air before the first caption and after the last one counts too.
+export function boringRanges(captions, total, minGap = 3, keep = 0.5) {
+  const lines = [...captions].sort((a, b) => a.start - b.start);
+  const ranges = [];
+  const add = (start, end) => {
+    if (end > start) ranges.push({ start, end });
+  };
+  let prevEnd = 0;
+  for (const line of lines) {
+    if (line.start - prevEnd > minGap) {
+      add(prevEnd + keep, line.start - keep);
+    }
+    prevEnd = Math.max(prevEnd, line.end);
+  }
+  if (lines.length && total > 0 && total - prevEnd > minGap) {
+    add(prevEnd + keep, total - keep);
+  }
+  return ranges;
+}
+
+// Move timed items (captions, overlays) to match a timeline with
+// ranges cut out of it. An item that sat fully inside a cut range
+// goes away, one that straddled a cut gets shorter.
+export function shiftTimedItems(items, ranges) {
+  const sorted = [...ranges].sort((a, b) => a.start - b.start);
+  const cutBefore = (t) => {
+    let cut = 0;
+    for (const r of sorted) {
+      if (r.start >= t) break;
+      cut += Math.min(r.end, t) - r.start;
+    }
+    return cut;
+  };
+  const out = [];
+  for (const item of items) {
+    const start = item.start - cutBefore(item.start);
+    const end = item.end - cutBefore(item.end);
+    if (end <= start) continue;
+    out.push({ ...item, start, end });
+  }
+  return out;
+}
+
 export function formatTime(seconds) {
   const s = Math.max(0, seconds);
   const m = Math.floor(s / 60);

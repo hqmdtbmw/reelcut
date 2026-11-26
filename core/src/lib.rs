@@ -328,6 +328,18 @@ impl Timeline {
         removed
     }
 
+    /// Cut the boring parts out of the edit: the long gaps between
+    /// captions where nobody says anything. The text overlays move
+    /// with the cuts, and any overlay fully inside a cut goes away.
+    /// Returns how many stretches were cut.
+    pub fn cut_boring_parts(&mut self, captions: &[Caption], total: f64) -> usize {
+        let ranges = boring_ranges(captions, total, 3.0, 0.5);
+        let count = ranges.len();
+        self.remove_silences(&ranges);
+        self.overlays = shift_timed_overlays(&self.overlays, &ranges);
+        count
+    }
+
     /// Keep only the first `target` seconds of the edit. Clips past
     /// the target are dropped, the clip straddling it is trimmed, and
     /// text overlays are clamped to the new end. Returns false when
@@ -457,6 +469,68 @@ pub fn detect_silence(
     ranges
 }
 
+/// Find the boring parts of an edit from its captions: the long gaps
+/// where nobody says anything. A gap only counts when it is longer
+/// than `min_gap` seconds, and each cut leaves `keep` seconds of
+/// breathing room on both sides so the edit does not sound chopped.
+/// The dead air before the first caption and after the last one
+/// counts too.
+pub fn boring_ranges(captions: &[Caption], total: f64, min_gap: f64, keep: f64) -> Vec<SilenceRange> {
+    let mut lines: Vec<&Caption> = captions.iter().collect();
+    lines.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
+    let mut ranges = Vec::new();
+    let mut prev_end = 0.0;
+    for line in &lines {
+        if line.start - prev_end > min_gap {
+            let start = prev_end + keep;
+            let end = line.start - keep;
+            if end > start {
+                ranges.push(SilenceRange { start, end });
+            }
+        }
+        prev_end = prev_end.max(line.end);
+    }
+    if !lines.is_empty() && total > 0.0 && total - prev_end > min_gap {
+        let start = prev_end + keep;
+        let end = total - keep;
+        if end > start {
+            ranges.push(SilenceRange { start, end });
+        }
+    }
+    ranges
+}
+
+/// Move text overlays to match a timeline with ranges cut out of it.
+/// An overlay that sat fully inside a cut range goes away, one that
+/// straddled a cut gets shorter.
+fn shift_timed_overlays(overlays: &[TextOverlay], ranges: &[SilenceRange]) -> Vec<TextOverlay> {
+    let mut sorted: Vec<&SilenceRange> = ranges.iter().collect();
+    sorted.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
+    let cut_before = |t: f64| -> f64 {
+        let mut cut = 0.0;
+        for r in &sorted {
+            if r.start >= t {
+                break;
+            }
+            cut += r.end.min(t) - r.start;
+        }
+        cut
+    };
+    let mut out = Vec::new();
+    for overlay in overlays {
+        let start = overlay.start - cut_before(overlay.start);
+        let end = overlay.end - cut_before(overlay.end);
+        if end <= start {
+            continue;
+        }
+        let mut moved = overlay.clone();
+        moved.start = start;
+        moved.end = end;
+        out.push(moved);
+    }
+    out
+}
+
 /// Group recognised words into caption lines. A new line starts when
 /// the gap between words is over 0.8 seconds, or when the line already
 /// holds 7 words.
@@ -542,6 +616,16 @@ pub fn wasm_cut_range(timeline_json: &str, start: f64, end: f64) -> String {
     };
     timeline.cut_range(start, end);
     timeline.to_json()
+}
+
+/// Find the boring parts of an edit from its captions, given as a
+/// JSON array of {text, start, end} lines and the total length in
+/// seconds. Returns a JSON array of {start, end} ranges.
+#[wasm_bindgen]
+pub fn wasm_boring_ranges(captions_json: &str, total: f64) -> String {
+    let captions: Vec<Caption> = serde_json::from_str(captions_json).unwrap_or_default();
+    let ranges = boring_ranges(&captions, total, 3.0, 0.5);
+    serde_json::to_string(&ranges).unwrap_or_else(|_| "[]".to_string())
 }
 
 #[cfg(test)]
@@ -685,6 +769,91 @@ mod tests {
         ];
         assert_eq!(t.remove_silences(&ranges), 2);
         assert!((t.total_duration() - 15.0).abs() < 1e-9);
+    }
+
+    fn sample_captions() -> Vec<Caption> {
+        vec![
+            Caption { text: "hello".into(), start: 1.0, end: 3.0 },
+            Caption { text: "and then".into(), start: 8.0, end: 10.0 },
+            Caption { text: "goodbye".into(), start: 12.0, end: 14.0 },
+        ]
+    }
+
+    #[test]
+    fn boring_ranges_find_the_gaps() {
+        // Gaps of 5 seconds and 2 seconds between lines, in a 20
+        // second edit. Only the 5 second gap counts, and it keeps
+        // half a second of breathing room on both sides.
+        let ranges = boring_ranges(&sample_captions(), 20.0, 3.0, 0.5);
+        assert_eq!(ranges.len(), 2);
+        assert!((ranges[0].start - 3.5).abs() < 1e-9);
+        assert!((ranges[0].end - 7.5).abs() < 1e-9);
+        // Trailing dead air after the last caption counts too.
+        assert!((ranges[1].start - 14.5).abs() < 1e-9);
+        assert!((ranges[1].end - 19.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn boring_ranges_ignore_short_gaps() {
+        let captions = vec![
+            Caption { text: "one".into(), start: 1.0, end: 2.0 },
+            Caption { text: "two".into(), start: 4.0, end: 5.0 },
+        ];
+        assert!(boring_ranges(&captions, 6.0, 3.0, 0.5).is_empty());
+        assert!(boring_ranges(&[], 20.0, 3.0, 0.5).is_empty());
+    }
+
+    #[test]
+    fn boring_ranges_catch_leading_dead_air() {
+        let captions = vec![Caption { text: "late start".into(), start: 6.0, end: 8.0 }];
+        let ranges = boring_ranges(&captions, 10.0, 3.0, 0.5);
+        assert_eq!(ranges.len(), 1);
+        assert!((ranges[0].start - 0.5).abs() < 1e-9);
+        assert!((ranges[0].end - 5.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cut_boring_parts_moves_overlays_with_the_cuts() {
+        let mut t = Timeline::new();
+        t.add_clip(Clip::new("a", "clip.mp4", 0.0, 16.0, 0.0));
+        // Same captions in a 16 second edit: one boring stretch,
+        // 3.5 to 7.5. The trailing gap is only 2 seconds, so it stays.
+        t.add_overlay(TextOverlay {
+            id: "o1".into(),
+            text: "early".into(),
+            start: 1.0,
+            end: 2.0,
+            x: 0.5,
+            y: 0.5,
+            size: 48,
+        });
+        t.add_overlay(TextOverlay {
+            id: "o2".into(),
+            text: "late".into(),
+            start: 10.0,
+            end: 12.0,
+            x: 0.5,
+            y: 0.5,
+            size: 48,
+        });
+        t.add_overlay(TextOverlay {
+            id: "o3".into(),
+            text: "inside the cut".into(),
+            start: 4.0,
+            end: 7.0,
+            x: 0.5,
+            y: 0.5,
+            size: 48,
+        });
+        assert_eq!(t.cut_boring_parts(&sample_captions(), 16.0), 1);
+        assert!((t.total_duration() - 12.0).abs() < 1e-9);
+        assert_eq!(t.overlays.len(), 2);
+        assert!((t.overlays[0].start - 1.0).abs() < 1e-9);
+        // The late overlay slides 4 seconds earlier.
+        assert!((t.overlays[1].start - 6.0).abs() < 1e-9);
+        assert!((t.overlays[1].end - 8.0).abs() < 1e-9);
+        // The overlay that sat inside the cut is gone.
+        assert!(t.overlays.iter().all(|o| o.id != "o3"));
     }
 
     #[test]

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  boringRanges,
   clampMusicVolume,
   clipDuration,
   cutRange,
@@ -14,6 +15,7 @@ import {
   musicLastLoopLength,
   musicLoops,
   packClips,
+  shiftTimedItems,
   splitClip,
   totalDuration,
   trimClip,
@@ -120,6 +122,49 @@ test("cutdown drops trailing clips", () => {
 test("cutdown leaves a short timeline alone", () => {
   assert.equal(totalDuration(cutdown(twoClips(), 16)), 16);
   assert.equal(totalDuration(cutdown(twoClips(), 20)), 16);
+});
+
+test("boring ranges find the long gaps between captions", () => {
+  const captions = [
+    { text: "hello", start: 1, end: 3 },
+    { text: "and then", start: 8, end: 10 },
+    { text: "goodbye", start: 12, end: 14 },
+  ];
+  // The 5 second gap counts, the 2 second one does not, and the
+  // dead air after the last caption counts too. Each cut keeps
+  // half a second of breathing room on both sides.
+  const ranges = boringRanges(captions, 20);
+  assert.deepEqual(ranges, [
+    { start: 3.5, end: 7.5 },
+    { start: 14.5, end: 19.5 },
+  ]);
+});
+
+test("boring ranges catch leading dead air and ignore short gaps", () => {
+  const late = [{ text: "late start", start: 6, end: 8 }];
+  assert.deepEqual(boringRanges(late, 10), [{ start: 0.5, end: 5.5 }]);
+
+  const tight = [
+    { text: "one", start: 1, end: 2 },
+    { text: "two", start: 4, end: 5 },
+  ];
+  assert.deepEqual(boringRanges(tight, 6), []);
+  assert.deepEqual(boringRanges([], 20), []);
+});
+
+test("shifting timed items follows the cuts", () => {
+  const ranges = [{ start: 3.5, end: 7.5 }];
+  const items = [
+    { text: "early", start: 1, end: 2 },
+    { text: "straddler", start: 6, end: 9 },
+    { text: "late", start: 10, end: 12 },
+    { text: "inside", start: 4, end: 7 },
+  ];
+  const out = shiftTimedItems(items, ranges);
+  assert.equal(out.length, 3);
+  assert.deepEqual(out[0], { text: "early", start: 1, end: 2 });
+  assert.deepEqual(out[1], { text: "straddler", start: 3.5, end: 5 });
+  assert.deepEqual(out[2], { text: "late", start: 6, end: 8 });
 });
 
 test("formatTime reads like a clock", () => {

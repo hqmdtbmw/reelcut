@@ -48,16 +48,16 @@ wasm-pack build --target web --out-dir ../web/src/wasm --out-name reelcut-core
 - Import one or more video files, preview with play and pause.
 - Timeline with trim by dragging clip edges, split at the playhead, delete, reorder, speed, volume, fade in and out.
 - Text overlays with position and timing, captions you can type or dictate while the video plays (Chrome only).
-- Agent bar: remove the silences, add captions, cut the first seconds, make a 30 second cutdown, make it vertical or horizontal, speed the whole thing up or down, split at a time, delete a clip, add text, mute, set volume, add fades, add music.
+- Agent bar: remove the silences, cut the boring parts, add captions, cut the first seconds, make a 30 second cutdown, make it vertical or horizontal, speed the whole thing up or down, split at a time, delete a clip, add text, mute, set volume, add fades, add music.
 - Background music: pick an audio file and it plays under your video while you preview, looping to fill the edit. You can change its volume or take it out, and the export mixes it in with the clip audio.
 - Silence removal reads the real audio of your clips, finds the quiet stretches with the Rust core (WebAssembly when it loads, JavaScript mirror otherwise), and cuts them out.
+- Cutting the boring parts uses your captions: it finds the gaps longer than 3 seconds where nobody says anything and cuts them out, leaving half a second of breathing room on each side. Your captions and text overlays move with the cuts.
 - Export renders the full sequence to a webm file through canvas and MediaRecorder, with overlays, captions, fades and audio.
 - Vertical 9:16 and horizontal 16:9 output.
 
 ## What is next
 
 - Auto captions from the audio itself, on device, instead of dictation.
-- More agent commands: "cut the boring parts".
 - Native shells for Linux, Windows and iOS using the same Rust core.
 - Multi-track timeline with a separate audio track.
 - Real-time preview effects and colour controls.
@@ -67,6 +67,7 @@ wasm-pack build --target web --out-dir ../web/src/wasm --out-name reelcut-core
 - Export is webm (VP9/Opus). MP4 export needs a native encoder and comes with the desktop shell.
 - Caption dictation listens through your microphone while the video plays, so it needs a quiet room and only works in Chrome. Typed captions work everywhere.
 - Silence removal needs an audio track in the clip. A clip with no audio has nothing to remove.
+- Cutting the boring parts needs captions, so it knows where nobody is talking. Without captions, remove the silences works from the audio instead.
 - Everything runs on your machine. Large files use a lot of memory while exporting.
 - The editor is a first version. It handles one video track, which is enough for most short videos, but it is not a replacement for a full multi-track suite yet.
 

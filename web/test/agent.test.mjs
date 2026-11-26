@@ -59,6 +59,13 @@ test("fades", () => {
   assert.deepEqual(parseCommand("add fades"), { kind: "fade-all", seconds: 0.5 });
 });
 
+test("cut the boring parts", () => {
+  assert.deepEqual(parseCommand("cut the boring parts"), { kind: "cut-boring-parts" });
+  assert.deepEqual(parseCommand("remove the boring bits"), { kind: "cut-boring-parts" });
+  assert.deepEqual(parseCommand("cut out the dead air"), { kind: "cut-boring-parts" });
+  assert.deepEqual(parseCommand("tighten it up"), { kind: "cut-boring-parts" });
+});
+
 test("music commands", () => {
   assert.deepEqual(parseCommand("add music"), { kind: "add-music" });
   assert.deepEqual(parseCommand("add a song"), { kind: "add-music" });

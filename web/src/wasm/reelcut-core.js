@@ -1,6 +1,30 @@
 /* @ts-self-types="./reelcut-core.d.ts" */
 
 /**
+ * Find the boring parts of an edit from its captions, given as a
+ * JSON array of {text, start, end} lines and the total length in
+ * seconds. Returns a JSON array of {start, end} ranges.
+ * @param {string} captions_json
+ * @param {number} total
+ * @returns {string}
+ */
+export function wasm_boring_ranges(captions_json, total) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const val2 = +total;
+        const ptr0 = passStringToWasm0(captions_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.wasm_boring_ranges(ptr0, len0, val2);
+        deferred3_0 = ret[0];
+        deferred3_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
  * Cut a time range out of a timeline given as JSON, and return the
  * new timeline as JSON. Returns an empty string when the input does
  * not parse.

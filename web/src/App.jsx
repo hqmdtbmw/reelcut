@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  boringRanges,
   clampMusicVolume,
   clipAtTime,
   clipDuration,
@@ -11,6 +12,7 @@ import {
   makeClip,
   moveClip,
   packClips,
+  shiftTimedItems,
   splitClip,
   totalDuration,
   trimClip,
@@ -378,6 +380,38 @@ export default function App() {
     }
   }
 
+  // Cut the boring parts: the long gaps between captions where
+  // nobody says anything. It needs captions to know where those
+  // gaps are, and the captions and text overlays move with the cuts.
+  function cutBoringParts() {
+    if (!clips.length) {
+      setAgentSay("Import a video first, then I can cut the boring parts.");
+      return;
+    }
+    if (!captions.length) {
+      setAgentSay(
+        "I need captions to know where the boring parts are. Add captions first, or say \"remove the silences\" and I will listen to the audio instead.",
+      );
+      return;
+    }
+    const ranges = boringRanges(captions, total);
+    if (!ranges.length) {
+      setAgentSay("I checked the gaps between your captions and found nothing longer than 3 seconds. It is already tight.");
+      return;
+    }
+    const removed = ranges.reduce((sum, r) => sum + (r.end - r.start), 0);
+    let next = clips;
+    const sorted = [...ranges].sort((a, b) => b.start - a.start);
+    for (const r of sorted) next = cutRange(next, r.start, r.end);
+    setClips(next);
+    setCaptions((prev) => shiftTimedItems(prev, ranges));
+    setOverlays((prev) => shiftTimedItems(prev, ranges));
+    seek(0);
+    setAgentSay(
+      `Cut ${ranges.length} boring ${ranges.length === 1 ? "stretch" : "stretches"}, ${removed.toFixed(1)} seconds in total. The captions and text moved with the cuts.`,
+    );
+  }
+
   function addCaptions() {
     const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!Recognition) {
@@ -431,6 +465,9 @@ export default function App() {
     switch (parsed.kind) {
       case "remove-silences":
         await removeSilences();
+        return;
+      case "cut-boring-parts":
+        cutBoringParts();
         return;
       case "add-captions":
         addCaptions();

@@ -4,6 +4,7 @@
 //
 // parseCommand(text, context) returns one of:
 //   { kind: "remove-silences" }
+//   { kind: "cut-boring-parts" }
 //   { kind: "add-captions" }
 //   { kind: "cut-first", seconds }
 //   { kind: "cutdown", seconds }
@@ -33,6 +34,12 @@ export function parseCommand(rawText, context = {}) {
 
   if (/silence/.test(text) && /remov|cut|delete|drop|get rid/.test(text)) {
     return { kind: "remove-silences" };
+  }
+
+  // "cut the boring parts", "remove the boring bits",
+  // "cut out the dead air", "tighten it up".
+  if (/boring|dead air|tighten/.test(text) && /cut|remov|drop|get rid|tighten/.test(text)) {
+    return { kind: "cut-boring-parts" };
   }
 
   if (/caption/.test(text) && /add|generate|create|transcri/.test(text)) {
@@ -135,6 +142,7 @@ export function parseCommand(rawText, context = {}) {
 // One line of help the bar can show when it does not understand.
 export const EXAMPLE_COMMANDS = [
   "remove the silences",
+  "cut the boring parts",
   "add captions",
   "cut the first 5 seconds",
   "make a 30 second cutdown",
