@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  addAudioClip,
   adjustClipEffect,
   adjustClipVolume,
   boringRanges,
@@ -11,10 +12,12 @@ import {
   clipFilter,
   cutRange,
   cutdown,
+  cutdownAudioClips,
   deleteClip,
   detectSilence,
   effectiveVolume,
   formatTime,
+  makeAudioClip,
   makeClip,
   makeHistory,
   moveClip,
@@ -22,13 +25,17 @@ import {
   packClips,
   pushHistory,
   redoHistory,
+  removeAudioClip,
+  setAudioClipVolume,
   setClipEffects,
   setClipMuted,
   setClipVolume,
+  shiftAudioClips,
   shiftTimedItems,
   shortcutForEvent,
   snapshotState,
   splitClip,
+  toggleAudioClipMuted,
   totalDuration,
   trimClip,
   undoHistory,
@@ -62,6 +69,8 @@ export default function App() {
   const [overlayDraft, setOverlayDraft] = useState({ text: "", start: 0, end: 3, position: "Bottom" });
   const [captionDraft, setCaptionDraft] = useState({ text: "", start: 0, end: 3 });
   const [music, setMusic] = useState(null);
+  const [audioClips, setAudioClips] = useState([]);
+  const [selectedAudioId, setSelectedAudioId] = useState(null);
 
   const videoRef = useRef(null);
   const trackRef = useRef(null);
@@ -70,6 +79,10 @@ export default function App() {
   const musicAudioRef = useRef(null);
   const musicRef = useRef(null);
   musicRef.current = music;
+  const audioInputRef = useRef(null);
+  const audioElsRef = useRef(new Map());
+  const audioClipsRef = useRef(audioClips);
+  audioClipsRef.current = audioClips;
   const [wasmReady, setWasmReady] = useState(false);
   const playheadRef = useRef(0);
   playheadRef.current = playhead;
@@ -88,6 +101,7 @@ export default function App() {
   const packed = useMemo(() => packClips(clips), [clips]);
   const total = useMemo(() => totalDuration(clips), [clips]);
   const selected = packed.find((c) => c.id === selectedId) || null;
+  const selectedAudio = audioClips.find((c) => c.id === selectedAudioId) || null;
   const currentClip = clipAtTime(packed, playhead);
   const activeOverlays = overlays.filter((o) => playhead >= o.start && playhead < o.end);
   const activeCaption = captions.find((c) => playhead >= c.start && playhead < c.end);
@@ -152,6 +166,54 @@ export default function App() {
     if (!audio || !music || playing) return;
     audio.currentTime = music.duration > 0 ? playhead % music.duration : playhead;
   }, [playhead, music, playing]);
+
+  // One audio element per audio clip, kept in a map so the preview
+  // can start and stop each clip on its own. Elements for clips
+  // that are gone get paused and dropped.
+  useEffect(() => {
+    const els = audioElsRef.current;
+    for (const clip of audioClips) {
+      let el = els.get(clip.id);
+      if (!el) {
+        el = new Audio();
+        els.set(clip.id, el);
+      }
+      if (el.dataset.track !== clip.url) {
+        el.dataset.track = clip.url;
+        el.src = clip.url;
+      }
+      el.volume = effectiveVolume(clip);
+    }
+    for (const [id, el] of [...els]) {
+      if (!audioClips.some((c) => c.id === id)) {
+        el.pause();
+        el.removeAttribute("src");
+        els.delete(id);
+      }
+    }
+  }, [audioClips]);
+
+  // Keep the audio track in sync with the playhead. A clip only
+  // sounds while the playhead is inside it. Scrubbing while paused
+  // moves each clip to the right spot in its file, so pressing play
+  // picks it up from there.
+  useEffect(() => {
+    for (const clip of audioClips) {
+      const el = audioElsRef.current.get(clip.id);
+      if (!el) continue;
+      const offset = playhead - clip.start;
+      const active = offset >= 0 && offset < clip.duration;
+      if (playing && active) {
+        if (Math.abs(el.currentTime - offset) > 0.3) el.currentTime = offset;
+        if (el.paused) el.play().catch(() => {});
+      } else {
+        el.pause();
+        if (!playing && active && Math.abs(el.currentTime - offset) > 0.3) {
+          el.currentTime = offset;
+        }
+      }
+    }
+  }, [playing, playhead, audioClips]);
 
   // Keep the preview video on the right clip and the right source time.
   useEffect(() => {
@@ -223,6 +285,7 @@ export default function App() {
       clips: clipsRef.current,
       overlays: overlaysRef.current,
       captions: captionsRef.current,
+      audioClips: audioClipsRef.current,
       music: musicRef.current,
     });
   }
@@ -249,8 +312,10 @@ export default function App() {
     setClips(state.clips);
     setOverlays(state.overlays);
     setCaptions(state.captions);
+    setAudioClips(state.audioClips || []);
     setMusic(state.music);
     setSelectedId((prev) => (state.clips.some((c) => c.id === prev) ? prev : null));
+    setSelectedAudioId((prev) => ((state.audioClips || []).some((c) => c.id === prev) ? prev : null));
     setPlayhead((prev) => Math.min(prev, totalDuration(state.clips)));
     setPlaying(false);
   }
@@ -376,6 +441,49 @@ export default function App() {
     setAgentSay("Removed the music.");
   }
 
+  // Add one or more audio files to the audio track. Each clip lands
+  // at the playhead, or at the start when the playhead is past the
+  // end of the video.
+  async function importAudio(files) {
+    const audios = Array.from(files).filter((f) => f.type.startsWith("audio/"));
+    if (!audios.length) {
+      setAgentSay("Those files are not audio. Try an mp3, wav or ogg file.");
+      return;
+    }
+    recordHistory();
+    for (const file of audios) {
+      const url = URL.createObjectURL(file);
+      const duration = await new Promise((resolve) => {
+        const probe = document.createElement("audio");
+        probe.preload = "metadata";
+        probe.onloadedmetadata = () => resolve(probe.duration || 0);
+        probe.onerror = () => resolve(0);
+        probe.src = url;
+      });
+      if (!duration) {
+        setAgentSay(`I could not read ${file.name}. It may be a format this browser cannot play.`);
+        continue;
+      }
+      const start = playheadRef.current < total ? playheadRef.current : 0;
+      const clip = makeAudioClip(newId("audio"), file.name, url, start, duration);
+      clip.file = file;
+      setAudioClips((prev) => addAudioClip(prev, clip));
+      setSelectedAudioId(clip.id);
+      setSelectedId(null);
+    }
+    setAgentSay(
+      `Added ${audios.length} audio ${audios.length > 1 ? "clips" : "clip"} to the audio track. Click one on the track to change its volume or mute it.`,
+    );
+  }
+
+  function removeSelectedAudio() {
+    if (!selectedAudio) return;
+    recordHistory();
+    setAudioClips(removeAudioClip(audioClips, selectedAudio.id));
+    setSelectedAudioId(null);
+    setAgentSay(`Removed ${selectedAudio.name} from the audio track.`);
+  }
+
   function splitAtPlayhead() {
     if (!currentClip) return;
     const out = splitClip(clips, currentClip.id, playhead);
@@ -490,8 +598,12 @@ export default function App() {
       for (const r of sorted) next = cutRange(next, r.start, r.end);
       recordHistory();
       setClips(next);
+      // The audio track moves with the cuts, the same as the captions
+      // and text do, so a voiceover stays lined up with the video.
+      setAudioClips((prev) => shiftAudioClips(prev, allRanges));
       seek(0);
-      setAgentSay(`Removed ${allRanges.length} silent ${allRanges.length === 1 ? "stretch" : "stretches"}, ${removed.toFixed(1)} seconds in total. The edit is tighter now.`);
+      const audioNote = audioClipsRef.current.length ? " The audio track moved with the cuts." : "";
+      setAgentSay(`Removed ${allRanges.length} silent ${allRanges.length === 1 ? "stretch" : "stretches"}, ${removed.toFixed(1)} seconds in total. The edit is tighter now.${audioNote}`);
     } catch (err) {
       setAgentSay("I could not read the audio in this clip, so I left the timeline alone.");
     } finally {
@@ -526,9 +638,11 @@ export default function App() {
     setClips(next);
     setCaptions((prev) => shiftTimedItems(prev, ranges));
     setOverlays((prev) => shiftTimedItems(prev, ranges));
+    setAudioClips((prev) => shiftAudioClips(prev, ranges));
     seek(0);
+    const audioNote = audioClipsRef.current.length ? " The audio track moved with the cuts." : "";
     setAgentSay(
-      `Cut ${ranges.length} boring ${ranges.length === 1 ? "stretch" : "stretches"}, ${removed.toFixed(1)} seconds in total. The captions and text moved with the cuts.`,
+      `Cut ${ranges.length} boring ${ranges.length === 1 ? "stretch" : "stretches"}, ${removed.toFixed(1)} seconds in total. The captions and text moved with the cuts.${audioNote}`,
     );
   }
 
@@ -612,6 +726,7 @@ export default function App() {
         const seconds = Math.min(parsed.seconds, total);
         recordHistory();
         setClips(cutRange(clips, 0, seconds));
+        setAudioClips((prev) => shiftAudioClips(prev, [{ start: 0, end: seconds }]));
         seek(0);
         setAgentSay(`Cut the first ${seconds} seconds.`);
         return;
@@ -624,6 +739,7 @@ export default function App() {
         }
         recordHistory();
         setClips(cutdown(clips, parsed.seconds));
+        setAudioClips((prev) => cutdownAudioClips(prev, parsed.seconds));
         setOverlays((prev) =>
           prev
             .filter((o) => o.start < parsed.seconds)
@@ -783,6 +899,43 @@ export default function App() {
         setMusic({ ...music, volume: parsed.volume });
         setAgentSay(`Music volume set to ${Math.round(parsed.volume * 100)} percent.`);
         return;
+      case "mute-audio-track":
+        if (!audioClips.length) {
+          setAgentSay("There is no audio track yet. Add an audio clip first and then I can mute it.");
+          return;
+        }
+        recordHistory();
+        setAudioClips(audioClips.map((c) => ({ ...c, muted: true })));
+        setAgentSay("Muted the audio track. Each clip keeps its volume, so unmuting brings it back.");
+        return;
+      case "unmute-audio-track":
+        if (!audioClips.length) {
+          setAgentSay("There is no audio track yet, so there is nothing to unmute.");
+          return;
+        }
+        recordHistory();
+        setAudioClips(audioClips.map((c) => ({ ...c, muted: false })));
+        setAgentSay("Unmuted the audio track.");
+        return;
+      case "set-audio-track-volume":
+        if (!audioClips.length) {
+          setAgentSay("There is no audio track yet. Add an audio clip first and then I can change its volume.");
+          return;
+        }
+        recordHistory();
+        setAudioClips(audioClips.map((c) => ({ ...c, volume: parsed.volume, muted: false })));
+        setAgentSay(`Audio track volume set to ${Math.round(parsed.volume * 100)} percent.`);
+        return;
+      case "remove-audio-track":
+        if (!audioClips.length) {
+          setAgentSay("There is no audio track yet, so there is nothing to remove.");
+          return;
+        }
+        recordHistory();
+        setAudioClips([]);
+        setSelectedAudioId(null);
+        setAgentSay("Removed the audio track.");
+        return;
       default:
         setAgentSay(`I did not understand "${text}". Try one of these: ${EXAMPLE_COMMANDS.slice(0, 4).join(", ")}.`);
     }
@@ -806,9 +959,9 @@ export default function App() {
     video.muted = false;
     video.crossOrigin = "anonymous";
     // Build the export audio mix: the clip sound runs through a gain
-    // that follows each clip's volume and mute, and the music mixes
-    // in beside it when there is any. Without music the mix is still
-    // built, so the export is no longer silent.
+    // that follows each clip's volume and mute, the audio track mixes
+    // in beside it, and the music mixes in when there is any. Without
+    // music the mix is still built, so the export is no longer silent.
     let mix = null;
     try {
       mix = await buildExportAudio({
@@ -816,6 +969,7 @@ export default function App() {
         video,
         music,
         firstClip: packed[0],
+        audioClips,
       });
     } catch {
       mix = null;
@@ -1082,6 +1236,43 @@ export default function App() {
                 <div className="playhead" style={{ left: `calc(6px + (100% - 12px) * ${playhead / total})` }} />
               )}
             </div>
+            <p className="track-label">Audio</p>
+            <div className="audio-track">
+              {audioClips.length === 0 && <p className="track-empty">Audio clips you add will show up here.</p>}
+              {audioClips.map((clip) => (
+                <div
+                  key={clip.id}
+                  className={`audio-block ${selectedAudioId === clip.id ? "selected" : ""}`}
+                  style={{
+                    left: total > 0 ? `calc(6px + (100% - 12px) * ${clip.start / total})` : "6px",
+                    width: total > 0 ? `calc((100% - 12px) * ${clip.duration / total})` : "0px",
+                  }}
+                  onClick={() => {
+                    setSelectedAudioId(clip.id);
+                    setSelectedId(null);
+                  }}
+                >
+                  <div className="clip-name">{clip.name}</div>
+                  <div className="clip-meta">
+                    {formatTime(clip.duration)} · {clip.muted ? "muted" : `${Math.round(clip.volume * 100)}%`}
+                  </div>
+                </div>
+              ))}
+              {total > 0 && (
+                <div className="playhead" style={{ left: `calc(6px + (100% - 12px) * ${playhead / total})` }} />
+              )}
+            </div>
+            <input
+              type="file"
+              accept="audio/*"
+              multiple
+              ref={audioInputRef}
+              style={{ display: "none" }}
+              onChange={(e) => {
+                importAudio(e.target.files);
+                e.target.value = "";
+              }}
+            />
             <div className="clip-actions">
               <button type="button" onClick={doUndo} disabled={!canUndo(historyRef.current)}>
                 Undo
@@ -1100,6 +1291,9 @@ export default function App() {
               </button>
               <button type="button" onClick={() => moveSelected(1)} disabled={!selected}>
                 Move right
+              </button>
+              <button type="button" onClick={() => audioInputRef.current?.click()}>
+                Add audio
               </button>
               <button type="button" onClick={() => setVertical(!vertical)}>
                 {vertical ? "Make horizontal" : "Make vertical"}
@@ -1274,6 +1468,88 @@ export default function App() {
                 <p className="hint">Add a song and it will play under your video, looping to fill the edit.</p>
                 <button type="button" className="primary" onClick={() => musicInputRef.current?.click()}>
                   Add music
+                </button>
+              </>
+            )}
+          </div>
+
+          <div className="panel">
+            <h2>Audio track</h2>
+            {audioClips.length ? (
+              <>
+                <p className="hint">
+                  Voiceover, sound effects or a second music bed. Each clip plays where it sits on the timeline.
+                </p>
+                {selectedAudio ? (
+                  <>
+                    <p>
+                      <strong>{selectedAudio.name}</strong>
+                    </p>
+                    <p className="hint">
+                      {formatTime(selectedAudio.start)} to {formatTime(selectedAudio.start + selectedAudio.duration)} on
+                      the timeline.
+                    </p>
+                    <label>
+                      Volume: {selectedAudio.muted ? "muted" : `${Math.round(selectedAudio.volume * 100)}%`}
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={selectedAudio.volume}
+                        onChange={(e) => {
+                          recordSliderHistory();
+                          setAudioClips((prev) => setAudioClipVolume(prev, selectedAudio.id, parseFloat(e.target.value)));
+                        }}
+                      />
+                    </label>
+                    <div className="row">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          recordHistory();
+                          setAudioClips((prev) => toggleAudioClipMuted(prev, selectedAudio.id));
+                        }}
+                      >
+                        {selectedAudio.muted ? "Unmute clip" : "Mute clip"}
+                      </button>
+                      <button type="button" onClick={removeSelectedAudio}>
+                        Remove clip
+                      </button>
+                      <button type="button" onClick={() => audioInputRef.current?.click()}>
+                        Add audio
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <p className="hint">Click a clip on the audio track to change its volume or mute it.</p>
+                )}
+                {audioClips.map((c) => (
+                  <div className="overlay-row" key={c.id}>
+                    <span>
+                      {c.name} · {formatTime(c.start)} to {formatTime(c.start + c.duration)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        recordHistory();
+                        setAudioClips(removeAudioClip(audioClips, c.id));
+                        if (selectedAudioId === c.id) setSelectedAudioId(null);
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </>
+            ) : (
+              <>
+                <p className="hint">
+                  Add a voiceover or a sound effect and it will sit on its own track under the video, playing in time
+                  with the preview and mixed into the export.
+                </p>
+                <button type="button" className="primary" onClick={() => audioInputRef.current?.click()}>
+                  Add audio
                 </button>
               </>
             )}

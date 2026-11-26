@@ -23,12 +23,16 @@ class FakeSource {
     this.stopped = false;
     this.buffer = null;
     this.loop = false;
+    this.startWhen = null;
+    this.startOffset = null;
   }
   connect(node) {
     this.connectedTo.push(node);
   }
-  start() {
+  start(when, offset) {
     this.started = true;
+    this.startWhen = when ?? null;
+    this.startOffset = offset ?? null;
   }
   stop() {
     this.stopped = true;
@@ -44,6 +48,7 @@ class FakeAudioContext {
     this.dest = { stream: { getAudioTracks: () => [{ kind: "audio" }] } };
     this.resumed = false;
     this.closed = false;
+    this.currentTime = 0;
   }
   async resume() {
     this.resumed = true;
@@ -81,6 +86,24 @@ function fakeMusic(volume = 0.5) {
     name: "song.mp3",
     volume,
     file: { arrayBuffer: async () => new ArrayBuffer(4) },
+  };
+}
+
+function fakeAudioClip({ start = 5, duration = 10, volume = 0.8, muted = false, unreadable = false } = {}) {
+  return {
+    id: "a1",
+    name: "voice.mp3",
+    url: null,
+    start,
+    duration,
+    volume,
+    muted,
+    file: {
+      arrayBuffer: async () => {
+        if (unreadable) throw new Error("bad file");
+        return new ArrayBuffer(4);
+      },
+    },
   };
 }
 
@@ -194,4 +217,91 @@ test("stopping the export stops the music and closes the context", async () => {
   // Stopping twice, or with no mix, is fine.
   stopExportAudio(mix);
   stopExportAudio(null);
+});
+
+test("an audio clip mixes in at its place on the timeline", async () => {
+  const ctx = new FakeAudioContext();
+  const clip = makeClip("a", "a.mp4", null, 10);
+  const mix = await buildExportAudio({
+    createAudioContext: () => ctx,
+    video: {},
+    music: null,
+    firstClip: clip,
+    audioClips: [fakeAudioClip({ start: 5, duration: 10, volume: 0.8 })],
+  });
+  assert.equal(ctx.sources.length, 1);
+  const source = ctx.sources[0];
+  assert.equal(source.started, true);
+  assert.equal(source.loop, false);
+  // It starts 5 seconds into the export, from the start of its file.
+  assert.equal(source.startWhen, 5);
+  assert.equal(source.startOffset, 0);
+  // Its gain sits at the clip volume and feeds the same mix.
+  const gain = ctx.gains[1];
+  assert.equal(gain.gain.value, 0.8);
+  assert.deepEqual(source.connectedTo, [gain]);
+  assert.deepEqual(gain.connectedTo, [ctx.dest]);
+  assert.deepEqual(mix.audioSources, [source]);
+});
+
+test("a muted audio clip exports silence", async () => {
+  const ctx = new FakeAudioContext();
+  const mix = await buildExportAudio({
+    createAudioContext: () => ctx,
+    video: {},
+    music: null,
+    firstClip: makeClip("a", "a.mp4", null, 10),
+    audioClips: [fakeAudioClip({ volume: 0.8, muted: true })],
+  });
+  assert.equal(ctx.gains[1].gain.value, 0);
+  assert.equal(mix.audioSources.length, 1);
+});
+
+test("audio clips mix in beside the music", async () => {
+  const ctx = new FakeAudioContext();
+  const mix = await buildExportAudio({
+    createAudioContext: () => ctx,
+    video: {},
+    music: fakeMusic(0.5),
+    firstClip: makeClip("a", "a.mp4", null, 10),
+    audioClips: [fakeAudioClip({ start: 2, duration: 4, volume: 0.6 })],
+  });
+  assert.equal(mix.musicSource, ctx.sources[0]);
+  assert.equal(mix.audioSources[0], ctx.sources[1]);
+  assert.equal(ctx.gains[2].gain.value, 0.6);
+  assert.deepEqual(ctx.gains[2].connectedTo, [ctx.dest]);
+});
+
+test("an unreadable audio clip leaves the music and the rest alone", async () => {
+  const ctx = new FakeAudioContext();
+  const mix = await buildExportAudio({
+    createAudioContext: () => ctx,
+    video: {},
+    music: fakeMusic(0.5),
+    firstClip: makeClip("a", "a.mp4", null, 10),
+    audioClips: [
+      fakeAudioClip({ start: 0, duration: 3, unreadable: true }),
+      fakeAudioClip({ start: 4, duration: 3, volume: 0.7 }),
+    ],
+  });
+  assert.equal(mix.musicSource, ctx.sources[0]);
+  assert.equal(mix.audioSources.length, 1);
+  assert.equal(mix.audioSources[0], ctx.sources[1]);
+  assert.equal(mix.audioSources[0].startWhen, 4);
+  assert.equal(mix.track.kind, "audio");
+});
+
+test("stopping the export stops the audio clips too", async () => {
+  const ctx = new FakeAudioContext();
+  const mix = await buildExportAudio({
+    createAudioContext: () => ctx,
+    video: {},
+    music: fakeMusic(0.5),
+    firstClip: makeClip("a", "a.mp4", null, 10),
+    audioClips: [fakeAudioClip()],
+  });
+  stopExportAudio(mix);
+  assert.equal(ctx.sources[0].stopped, true);
+  assert.equal(ctx.sources[1].stopped, true);
+  assert.equal(ctx.closed, true);
 });

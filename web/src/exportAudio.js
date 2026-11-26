@@ -3,14 +3,20 @@ import { clampMusicVolume, effectiveVolume } from "./timeline.js";
 // The export draws video frames to a canvas and records them, but
 // the canvas has no sound of its own. This builds the audio side:
 // the export video element plays each clip, its sound runs through
-// a gain node that follows the clip's volume and mute, and the
-// background music, when there is any, mixes in on its own gain.
-// Both feed one destination, whose track goes on the export stream.
+// a gain node that follows the clip's volume and mute, the audio
+// track mixes in beside it, and the background music, when there
+// is any, mixes in on its own gain. All of them feed one
+// destination, whose track goes on the export stream.
+//
+// An audio clip starts at its place on the timeline, since the
+// export plays in real time from zero, and it plays from the start
+// of its file. A clip that would not decode is left out, losing
+// one clip is better than losing everything.
 //
 // It works with or without music. Before this, the no-music path
 // grabbed audio from a preview element that never played, so those
 // exports came out silent.
-export async function buildExportAudio({ createAudioContext, video, music, firstClip }) {
+export async function buildExportAudio({ createAudioContext, video, music, firstClip, audioClips = [] }) {
   const context = createAudioContext();
   if (context.resume) {
     try {
@@ -44,8 +50,26 @@ export async function buildExportAudio({ createAudioContext, video, music, first
       musicSource = null;
     }
   }
+  const audioSources = [];
+  for (const clip of audioClips) {
+    if (!clip || !clip.file || clip.duration <= 0) continue;
+    try {
+      const buf = await clip.file.arrayBuffer();
+      const decoded = await context.decodeAudioData(buf);
+      const source = context.createBufferSource();
+      source.buffer = decoded;
+      const gain = context.createGain();
+      gain.gain.value = effectiveVolume(clip);
+      source.connect(gain);
+      gain.connect(dest);
+      source.start(context.currentTime + clip.start, 0);
+      audioSources.push(source);
+    } catch {
+      // That clip would not decode. Leave it out and keep the rest.
+    }
+  }
   const track = dest.stream.getAudioTracks()[0] || null;
-  return { context, clipGain, musicSource, track };
+  return { context, clipGain, musicSource, audioSources, track };
 }
 
 // Set the clip gain for the clip now playing in the export, so each
@@ -56,13 +80,21 @@ export function setExportClipVolume(mix, clip) {
   }
 }
 
-// Stop the music and close the context after an export.
+// Stop the music and the audio track and close the context after
+// an export.
 export function stopExportAudio(mix) {
   if (!mix) return;
   try {
     mix.musicSource?.stop();
   } catch {
     // Already stopped, nothing to do.
+  }
+  for (const source of mix.audioSources || []) {
+    try {
+      source.stop();
+    } catch {
+      // Already stopped, nothing to do.
+    }
   }
   if (mix.context && mix.context.close) {
     mix.context.close().catch(() => {});

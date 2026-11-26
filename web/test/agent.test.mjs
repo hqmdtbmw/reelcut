@@ -173,3 +173,24 @@ test("unknown commands stay unknown", () => {
   const parsed = parseCommand("do something magical");
   assert.equal(parsed.kind, "unknown");
 });
+
+test("audio track commands", () => {
+  assert.deepEqual(parseCommand("mute the audio track"), { kind: "mute-audio-track" });
+  assert.deepEqual(parseCommand("unmute the audio track"), { kind: "unmute-audio-track" });
+  assert.deepEqual(parseCommand("set the audio track volume to 50%"), {
+    kind: "set-audio-track-volume",
+    volume: 0.5,
+  });
+  assert.deepEqual(parseCommand("set the audio track volume to 25 percent"), {
+    kind: "set-audio-track-volume",
+    volume: 0.25,
+  });
+  assert.deepEqual(parseCommand("remove the audio track"), { kind: "remove-audio-track" });
+  assert.deepEqual(parseCommand("delete the audio track"), { kind: "remove-audio-track" });
+});
+
+test("audio track commands do not read as clip commands", () => {
+  assert.notEqual(parseCommand("mute the audio track").kind, "mute");
+  assert.notEqual(parseCommand("mute the audio track").kind, "mute-clip");
+  assert.notEqual(parseCommand("set the audio track volume to 50%").kind, "set-volume");
+});

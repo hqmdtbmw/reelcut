@@ -24,6 +24,9 @@
 //   { kind: "add-music" }
 //   { kind: "remove-music" }
 //   { kind: "set-music-volume", volume }
+//   { kind: "mute-audio-track" } | { kind: "unmute-audio-track" }
+//   { kind: "set-audio-track-volume", volume }
+//   { kind: "remove-audio-track" }
 //   { kind: "set-effect", effect, mode, value, scope }
 //   { kind: "reset-effects", scope }
 //   { kind: "unknown", text }
@@ -131,6 +134,27 @@ export function parseCommand(rawText, context = {}) {
     return { kind: "set-music-volume", volume: 0.75 };
   }
 
+  // The audio track: "mute the audio track", "unmute the audio
+  // track", "set the audio track volume to 50%", "remove the audio
+  // track". These come before the clip mute rules below, so "mute
+  // the audio track" does not read as muting a video clip. Unmute
+  // is checked first because it contains "mute".
+  if (/audio track/.test(text)) {
+    if (/unmute/.test(text)) {
+      return { kind: "unmute-audio-track" };
+    }
+    if (/mute/.test(text)) {
+      return { kind: "mute-audio-track" };
+    }
+    if (/remov|delete|drop|get rid|take .* out/.test(text)) {
+      return { kind: "remove-audio-track" };
+    }
+    const audioVolume = text.match(/volume (?:to )?(\d{1,3})\s*(?:%|percent)?/);
+    if (audioVolume) {
+      return { kind: "set-audio-track-volume", volume: Math.min(100, parseInt(audioVolume[1], 10)) / 100 };
+    }
+  }
+
   // Per-clip mute and volume. "mute this clip", "unmute clip 2",
   // "set the volume to 50%", "turn the volume down". With no clip
   // named, the selected clip is the target, so index -1 means
@@ -228,6 +252,7 @@ export const EXAMPLE_COMMANDS = [
   "mute it",
   "mute this clip",
   "set the volume to 50%",
+  "mute the audio track",
   "make it brighter",
   "add music",
 ];

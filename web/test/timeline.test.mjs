@@ -1,11 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  addAudioClip,
   adjustClipEffect,
   adjustClipVolume,
+  audioClipsAtTime,
   boringRanges,
   canRedo,
   canUndo,
+  clampAudioVolume,
   clampClipVolume,
   clampEffect,
   clampMusicVolume,
@@ -13,11 +16,13 @@ import {
   clipFilter,
   cutRange,
   cutdown,
+  cutdownAudioClips,
   deleteClip,
   detectSilence,
   captionsFromWords,
   effectiveVolume,
   formatTime,
+  makeAudioClip,
   makeClip,
   makeHistory,
   moveClip,
@@ -27,13 +32,18 @@ import {
   packClips,
   pushHistory,
   redoHistory,
+  removeAudioClip,
+  setAudioClipMuted,
+  setAudioClipVolume,
   setClipEffects,
   setClipMuted,
   setClipVolume,
+  shiftAudioClips,
   shiftTimedItems,
   shortcutForEvent,
   snapshotState,
   splitClip,
+  toggleAudioClipMuted,
   toggleClipMuted,
   totalDuration,
   trimClip,
@@ -456,4 +466,131 @@ test("space on a focused button is left to the button", () => {
   const button = { tagName: "BUTTON" };
   assert.equal(shortcutForEvent({ key: " ", target: button }), null);
   assert.equal(shortcutForEvent({ key: "s", target: button }), "split");
+});
+
+function twoAudioClips() {
+  return [
+    makeAudioClip("a1", "voice.mp3", null, 2, 5),
+    makeAudioClip("a2", "sfx.mp3", null, 12, 3),
+  ];
+}
+
+test("an audio clip clamps its start, duration and volume", () => {
+  const clip = makeAudioClip("a", "voice.mp3", null, -2, 5, 2);
+  assert.equal(clip.start, 0);
+  assert.equal(clip.duration, 5);
+  assert.equal(clip.volume, 1);
+  assert.equal(clip.muted, false);
+  assert.equal(makeAudioClip("b", "x.mp3", null, 1, 0).duration, 0);
+});
+
+test("audio volume clamps to 0 to 1", () => {
+  assert.equal(clampAudioVolume(0.5), 0.5);
+  assert.equal(clampAudioVolume(2), 1);
+  assert.equal(clampAudioVolume(-1), 0);
+  assert.equal(clampAudioVolume(0), 0);
+  assert.equal(clampAudioVolume(NaN), 1);
+});
+
+test("adding an audio clip keeps the track in timeline order", () => {
+  const out = addAudioClip(twoAudioClips(), makeAudioClip("a3", "late.mp3", null, 8, 2));
+  assert.deepEqual(out.map((c) => c.id), ["a1", "a3", "a2"]);
+});
+
+test("removing an audio clip leaves the rest alone", () => {
+  const out = removeAudioClip(twoAudioClips(), "a1");
+  assert.equal(out.length, 1);
+  assert.equal(out[0].id, "a2");
+  assert.equal(removeAudioClip(twoAudioClips(), "nope").length, 2);
+});
+
+test("audio clips at a time only sound inside their clip", () => {
+  const clips = twoAudioClips();
+  assert.deepEqual(audioClipsAtTime(clips, 1), []);
+  assert.deepEqual(audioClipsAtTime(clips, 2).map((c) => c.id), ["a1"]);
+  assert.deepEqual(audioClipsAtTime(clips, 7), []);
+  assert.deepEqual(audioClipsAtTime(clips, 13).map((c) => c.id), ["a2"]);
+  const overlap = addAudioClip(clips, makeAudioClip("a3", "bed.mp3", null, 3, 10));
+  assert.deepEqual(audioClipsAtTime(overlap, 4).map((c) => c.id), ["a1", "a3"]);
+});
+
+test("audio clip volume and mute follow the clip rules", () => {
+  const clips = twoAudioClips();
+  const quieter = setAudioClipVolume(clips, "a1", 0.3);
+  assert.equal(quieter[0].volume, 0.3);
+  assert.equal(quieter[0].muted, false);
+  assert.equal(quieter[1].volume, 1);
+  const muted = setAudioClipMuted(clips, "a1");
+  assert.equal(muted[0].muted, true);
+  assert.equal(muted[0].volume, 1);
+  assert.equal(effectiveVolume(muted[0]), 0);
+  const flipped = toggleAudioClipMuted(muted, "a1");
+  assert.equal(flipped[0].muted, false);
+  const raised = setAudioClipVolume(muted, "a1", 0.5);
+  assert.equal(raised[0].muted, false);
+});
+
+test("shifting audio clips follows the cuts", () => {
+  const ranges = [{ start: 3.5, end: 7.5 }];
+  const clips = [
+    makeAudioClip("early", "early.mp3", null, 1, 1),
+    makeAudioClip("straddler", "mid.mp3", null, 6, 3),
+    makeAudioClip("late", "late.mp3", null, 10, 2),
+    makeAudioClip("inside", "gone.mp3", null, 4, 3),
+  ];
+  const out = shiftAudioClips(clips, ranges);
+  assert.equal(out.length, 3);
+  assert.deepEqual(
+    out.map((c) => [c.id, c.start, c.duration]),
+    [
+      ["early", 1, 1],
+      ["straddler", 3.5, 1.5],
+      ["late", 6, 2],
+    ],
+  );
+});
+
+test("shifting audio clips across two cuts drops the fully cut one", () => {
+  const clips = [makeAudioClip("a", "a.mp3", null, 0, 20)];
+  const out = shiftAudioClips(clips, [
+    { start: 2, end: 4 },
+    { start: 8, end: 10 },
+  ]);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].start, 0);
+  assert.equal(out[0].duration, 16);
+  const gone = shiftAudioClips([makeAudioClip("b", "b.mp3", null, 3, 1)], [{ start: 2, end: 4 }]);
+  assert.deepEqual(gone, []);
+});
+
+test("a cutdown trims and drops audio clips at the target", () => {
+  const clips = [
+    makeAudioClip("a", "a.mp3", null, 0, 10),
+    makeAudioClip("b", "b.mp3", null, 12, 5),
+    makeAudioClip("c", "c.mp3", null, 28, 5),
+  ];
+  const out = cutdownAudioClips(clips, 30);
+  assert.equal(out.length, 3);
+  assert.equal(out[0].duration, 10);
+  assert.equal(out[1].duration, 5);
+  assert.equal(out[2].duration, 2);
+  const trimmed = cutdownAudioClips(clips, 15);
+  assert.equal(trimmed.length, 2);
+  assert.equal(trimmed[1].duration, 3);
+  assert.equal(trimmed[1].start, 12);
+  assert.equal(cutdownAudioClips(clips, 0).length, 3);
+});
+
+test("a snapshot covers the audio track too", () => {
+  const state = snapshotState({
+    clips: twoClips(),
+    overlays: [],
+    captions: [],
+    audioClips: twoAudioClips(),
+    music: null,
+  });
+  assert.equal(state.audioClips.length, 2);
+  assert.equal(state.audioClips[0].name, "voice.mp3");
+  const undone = undoHistory(pushHistory(makeHistory(), state), editState([], [], [], null));
+  assert.equal(undone.state.audioClips.length, 2);
 });

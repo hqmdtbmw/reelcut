@@ -347,19 +347,22 @@ export function shiftTimedItems(items, ranges) {
 }
 
 // Undo and redo. A history entry is a snapshot of the whole edit:
-// the clips, the text overlays, the captions and the music. Snapshots
-// copy the clip and overlay objects, but the music file itself is
-// shared by reference, since it is never changed in place. The
-// history keeps the last 50 edits, old ones drop off the front.
+// the clips, the text overlays, the captions, the audio track and
+// the music. Snapshots copy the clip and overlay objects, but the
+// music file itself is shared by reference, since it is never
+// changed in place. The history keeps the last 50 edits, old ones
+// drop off the front.
 
 export const HISTORY_LIMIT = 50;
 
 // A plain snapshot of the edit, safe to store and restore later.
+// Old snapshots without an audio track still restore fine.
 export function snapshotState(state) {
   return {
     clips: state.clips.map((c) => ({ ...c, effects: { ...c.effects } })),
     overlays: state.overlays.map((o) => ({ ...o })),
     captions: state.captions.map((c) => ({ ...c })),
+    audioClips: (state.audioClips || []).map((c) => ({ ...c })),
     music: state.music ? { ...state.music } : null,
   };
 }
@@ -458,4 +461,106 @@ export function musicLastLoopLength(trackDuration, editDuration) {
   if (trackDuration <= 0 || editDuration <= 0) return 0;
   const loops = musicLoops(trackDuration, editDuration);
   return editDuration - (loops - 1) * trackDuration;
+}
+
+// The audio track. Voiceover, sound effects or a second music bed,
+// each clip sitting at a chosen point on the timeline. A clip has a
+// start in timeline seconds, a duration, a volume from 0 to 1 and a
+// mute flag, the same shape the video clips and the music use, so
+// the preview and the export can treat them all the same way.
+
+// Make one audio clip. The start and duration are clamped to zero
+// or more, the volume to the 0 to 1 range.
+export function makeAudioClip(id, name, url, start, duration, volume = 1) {
+  return {
+    id,
+    name,
+    url,
+    start: Math.max(0, start || 0),
+    duration: Math.max(0, duration || 0),
+    volume: clampAudioVolume(volume),
+    muted: false,
+  };
+}
+
+// Clamp an audio clip volume to the 0 to 1 range. Bad input falls
+// back to full volume, the same way the clip and music volumes do.
+export function clampAudioVolume(volume) {
+  if (!Number.isFinite(volume)) return 1;
+  return Math.min(1, Math.max(0, volume));
+}
+
+// Add an audio clip to the track, keeping the track in timeline
+// order so the track row reads left to right.
+export function addAudioClip(clips, clip) {
+  return [...clips, clip].sort((a, b) => a.start - b.start);
+}
+
+// Take one audio clip off the track.
+export function removeAudioClip(clips, id) {
+  return clips.filter((c) => c.id !== id);
+}
+
+// The clips sounding at a point in time. More than one can be
+// active at once, when clips overlap on the track.
+export function audioClipsAtTime(clips, time) {
+  return clips.filter((c) => time >= c.start && time < c.start + c.duration);
+}
+
+// Set one audio clip's volume, leaving the rest alone. Setting the
+// volume above zero also unmutes the clip, since dragging the
+// slider up is how you turn a clip back on.
+export function setAudioClipVolume(clips, id, volume) {
+  const next = clampAudioVolume(volume);
+  return clips.map((c) => {
+    if (c.id !== id) return c;
+    return { ...c, volume: next, muted: next > 0 ? false : c.muted };
+  });
+}
+
+// Mute or unmute one audio clip, keeping its volume for later.
+// With no third argument it mutes.
+export function setAudioClipMuted(clips, id, muted = true) {
+  return clips.map((c) => {
+    if (c.id !== id) return c;
+    return { ...c, muted: Boolean(muted) };
+  });
+}
+
+// Flip one audio clip's mute flag.
+export function toggleAudioClipMuted(clips, id) {
+  return clips.map((c) => {
+    if (c.id !== id) return c;
+    return { ...c, muted: !c.muted };
+  });
+}
+
+// Move audio clips to match a timeline with ranges cut out of it.
+// A clip that sat fully inside a cut range goes away, one that
+// straddled a cut gets shorter, the rest shift earlier by the cut
+// time. Reuses shiftTimedItems, then turns the end back into a
+// duration.
+export function shiftAudioClips(clips, ranges) {
+  const withEnds = clips.map((c) => ({ ...c, end: c.start + c.duration }));
+  return shiftTimedItems(withEnds, ranges).map(({ end, ...c }) => ({
+    ...c,
+    duration: end - c.start,
+  }));
+}
+
+// Keep only the first target seconds of the audio track. Clips past
+// the target go, the clip straddling it ends on the target.
+export function cutdownAudioClips(clips, target) {
+  if (target <= 0) return clips;
+  const out = [];
+  for (const clip of clips) {
+    const end = clip.start + clip.duration;
+    if (clip.start >= target) continue;
+    if (end > target) {
+      out.push({ ...clip, duration: target - clip.start });
+      continue;
+    }
+    out.push(clip);
+  }
+  return out;
 }
