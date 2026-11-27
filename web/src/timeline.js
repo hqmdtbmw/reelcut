@@ -630,8 +630,11 @@ export function audioRateSegments(audioClip, videoClips) {
 // more file seconds, so this adds up the rate over every stretch
 // from the clip start to that point. Before the clip it is zero,
 // past the end it stops at the end, so a seek never runs past
-// what the clip covers.
-export function audioFileOffset(audioClip, videoClips, time) {
+// what the clip covers. When the file length is given and the
+// clip needs more file than it holds, the clip loops, so the
+// offset wraps back to the start of the file instead of running
+// past the end.
+export function audioFileOffset(audioClip, videoClips, time, fileDuration) {
   if (!audioClip) return 0;
   const end = Math.min(Math.max(time, audioClip.start), audioClip.start + audioClip.duration);
   let offset = 0;
@@ -640,7 +643,33 @@ export function audioFileOffset(audioClip, videoClips, time) {
     const e = Math.min(seg.end, end);
     if (e > s) offset += (e - s) * seg.rate;
   }
+  if (Number.isFinite(fileDuration) && fileDuration > 0) {
+    return offset % fileDuration;
+  }
   return offset;
+}
+
+// How many file seconds an audio clip needs over its whole length.
+// A 5 second clip over a 2x stretch needs 10 file seconds, the same
+// clip at normal speed needs 5. This is the offset at the clip end.
+export function audioFileSeconds(audioClip, videoClips) {
+  if (!audioClip || audioClip.duration <= 0) return 0;
+  let total = 0;
+  for (const seg of audioRateSegments(audioClip, videoClips)) {
+    total += (seg.end - seg.start) * seg.rate;
+  }
+  return total;
+}
+
+// How many times the file has to play to fill the clip. One when
+// the file covers it, more when a sped up stretch needs more file
+// than the clip holds. Zero when the file length is unknown or the
+// clip needs nothing, so the caller can leave looping alone.
+export function audioClipLoops(audioClip, videoClips, fileDuration) {
+  if (!Number.isFinite(fileDuration) || fileDuration <= 0) return 0;
+  const needed = audioFileSeconds(audioClip, videoClips);
+  if (needed <= 0) return 0;
+  return Math.ceil(needed / fileDuration);
 }
 
 // Move the audio track through a speed change. Speeding the whole

@@ -1,4 +1,4 @@
-import { audioRateSegments, clampMusicVolume, effectiveVolume } from "./timeline.js";
+import { audioClipLoops, audioRateSegments, clampMusicVolume, effectiveVolume } from "./timeline.js";
 
 // The export draws video frames to a canvas and records them, but
 // the canvas has no sound of its own. This builds the audio side:
@@ -23,9 +23,12 @@ import { audioRateSegments, clampMusicVolume, effectiveVolume } from "./timeline
 // since the export video element plays at the clip speed. For the
 // audio track, each clip plays at the speed of the video clip under
 // it, changing rate as the export crosses into the next video clip,
-// so the words keep pace all the way through. The background music
-// stays at normal speed, it is a bed under the edit, not a voice
-// tied to a clip.
+// so the words keep pace all the way through. A clip over a sped
+// up stretch needs more of its file than the file holds, so it
+// loops to fill its slot instead of going quiet halfway through,
+// and every clip stops at the end of its slot, so a long file does
+// not bleed past it. The background music stays at normal speed,
+// it is a bed under the edit, not a voice tied to a clip.
 export async function buildExportAudio({ createAudioContext, video, music, firstClip, audioClips = [], clips = [] }) {
   const context = createAudioContext();
   if (context.resume) {
@@ -68,6 +71,10 @@ export async function buildExportAudio({ createAudioContext, video, music, first
       const decoded = await context.decodeAudioData(buf);
       const source = context.createBufferSource();
       source.buffer = decoded;
+      // A clip that needs more file than it holds loops to fill its
+      // slot. Every clip stops at the end of its slot, so a looped
+      // clip ends on time and a long file does not bleed past it.
+      source.loop = audioClipLoops(clip, clips, decoded.duration) > 1;
       const segments = audioRateSegments(clip, clips);
       if (source.playbackRate) {
         source.playbackRate.value = segments[0] ? segments[0].rate : 1;
@@ -82,6 +89,9 @@ export async function buildExportAudio({ createAudioContext, video, music, first
       source.connect(gain);
       gain.connect(dest);
       source.start(context.currentTime + clip.start, 0);
+      if (typeof source.stop === "function") {
+        source.stop(context.currentTime + clip.start + clip.duration);
+      }
       audioSources.push(source);
     } catch {
       // That clip would not decode. Leave it out and keep the rest.

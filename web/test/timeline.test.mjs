@@ -5,7 +5,9 @@ import {
   adjustClipEffect,
   adjustClipVolume,
   audioClipsAtTime,
+  audioClipLoops,
   audioFileOffset,
+  audioFileSeconds,
   audioRateAtTime,
   audioRateSegments,
   boringRanges,
@@ -793,4 +795,57 @@ test("the file offset is just the timeline offset at normal speed", () => {
   assert.equal(audioFileOffset(voice, twoClips(), 4), 2);
   assert.equal(audioFileOffset(voice, [], 4), 2);
   assert.equal(audioFileOffset(voice, twoClips(), 1), 0);
+});
+
+// Looping audio: a short clip over a sped up stretch needs more of
+// its file than the file holds, so it starts over from the top
+// instead of running out and going quiet.
+
+test("an audio clip counts the file seconds it needs", () => {
+  // A 5 second voiceover squeezed to 2.5 seconds by a 2x edit needs
+  // all 5 file seconds, the same clip at normal speed needs 2.5.
+  const voice = makeAudioClip("voice", "voice.mp3", null, 2, 2.5);
+  assert.equal(audioFileSeconds(voice, respeedTo(2)), 5);
+  assert.equal(audioFileSeconds(voice, twoClips()), 2.5);
+  assert.equal(audioFileSeconds(voice, []), 2.5);
+  assert.equal(audioFileSeconds(null, []), 0);
+  assert.equal(audioFileSeconds(makeAudioClip("voice", "voice.mp3", null, 2, 0), []), 0);
+});
+
+test("an audio clip counts how many times its file has to play", () => {
+  // The 5 second voiceover above needs 5 file seconds at 2x, so a
+  // 2 second file plays 3 times and a 5 second file plays once.
+  const voice = makeAudioClip("voice", "voice.mp3", null, 2, 2.5);
+  assert.equal(audioClipLoops(voice, respeedTo(2), 2), 3);
+  assert.equal(audioClipLoops(voice, respeedTo(2), 5), 1);
+  assert.equal(audioClipLoops(voice, respeedTo(2), 10), 1);
+  assert.equal(audioClipLoops(voice, twoClips(), 2), 2);
+  assert.equal(audioClipLoops(voice, respeedTo(2), 0), 0);
+  assert.equal(audioClipLoops(voice, respeedTo(2), undefined), 0);
+  assert.equal(audioClipLoops(null, [], 2), 0);
+});
+
+test("the file offset wraps back to the start when the clip loops", () => {
+  // The 5 second voiceover at 2x over a 2 second file: at 3.5
+  // seconds in it is 3 file seconds in, which is 1 second into its
+  // second play, and at the end it has played 5 file seconds, which
+  // is 1 second into its third play.
+  const voice = makeAudioClip("voice", "voice.mp3", null, 2, 2.5);
+  assert.equal(audioFileOffset(voice, respeedTo(2), 2, 2), 0);
+  assert.equal(audioFileOffset(voice, respeedTo(2), 3.5, 2), 1);
+  assert.equal(audioFileOffset(voice, respeedTo(2), 4.5, 2), 1);
+  assert.equal(audioFileOffset(voice, respeedTo(2), 9, 2), 1);
+});
+
+test("the file offset does not wrap when the file is long enough", () => {
+  const voice = makeAudioClip("voice", "voice.mp3", null, 2, 2.5);
+  assert.equal(audioFileOffset(voice, respeedTo(2), 3.5, 10), 3);
+  assert.equal(audioFileOffset(voice, respeedTo(2), 4.5, 10), 5);
+});
+
+test("the file offset is unwrapped when the file length is unknown", () => {
+  const voice = makeAudioClip("voice", "voice.mp3", null, 2, 2.5);
+  assert.equal(audioFileOffset(voice, respeedTo(2), 4.5), 5);
+  assert.equal(audioFileOffset(voice, respeedTo(2), 4.5, 0), 5);
+  assert.equal(audioFileOffset(voice, respeedTo(2), 4.5, NaN), 5);
 });

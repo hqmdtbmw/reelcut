@@ -25,6 +25,7 @@ class FakeSource {
     this.loop = false;
     this.startWhen = null;
     this.startOffset = null;
+    this.stopWhen = null;
     this.rateChanges = [];
     this.playbackRate = {
       value: 1,
@@ -41,14 +42,16 @@ class FakeSource {
     this.startWhen = when ?? null;
     this.startOffset = offset ?? null;
   }
-  stop() {
+  stop(when) {
     this.stopped = true;
+    this.stopWhen = when ?? null;
   }
 }
 
 class FakeAudioContext {
-  constructor({ decodeFails = false } = {}) {
+  constructor({ decodeFails = false, decodedDuration = 30 } = {}) {
     this.decodeFails = decodeFails;
+    this.decodedDuration = decodedDuration;
     this.gains = [];
     this.sources = [];
     this.elementSources = [];
@@ -81,7 +84,7 @@ class FakeAudioContext {
   }
   async decodeAudioData() {
     if (this.decodeFails) throw new Error("bad file");
-    return { duration: 30 };
+    return { duration: this.decodedDuration };
   }
   async close() {
     this.closed = true;
@@ -370,4 +373,52 @@ test("an audio clip exports at normal speed when no video clips are given", asyn
   assert.equal(ctx.sources[0].playbackRate.value, 1);
   assert.deepEqual(ctx.sources[0].rateChanges, []);
   assert.equal(mix.audioSources[0], ctx.sources[0]);
+});
+
+// Looping audio: a short clip over a sped up stretch needs more of
+// its file than the file holds, so it has to play over from the top
+// instead of going quiet halfway through its slot.
+
+test("an audio clip loops when its file runs out over a sped-up stretch", async () => {
+  // A 5 second clip at 2x needs 10 file seconds, but the file is
+  // only 5 seconds long, so it plays twice to fill its slot.
+  const ctx = new FakeAudioContext({ decodedDuration: 5 });
+  const fast = makeClip("a", "a.mp4", null, 10);
+  fast.speed = 2;
+  const mix = await buildExportAudio({
+    createAudioContext: () => ctx,
+    video: {},
+    music: null,
+    firstClip: fast,
+    audioClips: [fakeAudioClip({ start: 1, duration: 5, volume: 0.8 })],
+    clips: [fast],
+  });
+  assert.equal(ctx.sources.length, 1);
+  const source = ctx.sources[0];
+  assert.equal(source.loop, true);
+  assert.equal(source.playbackRate.value, 2);
+  assert.equal(source.startWhen, 1);
+  // It stops at the end of its slot, not when the loop runs out.
+  assert.equal(source.stopWhen, 6);
+  assert.equal(mix.audioSources[0], source);
+});
+
+test("an audio clip that fits stops at the end of its slot", async () => {
+  // A 10 second clip at normal speed needs 10 file seconds out of
+  // a 30 second file, so it does not loop, but it still stops at
+  // the end of its slot instead of playing the rest of the file.
+  const ctx = new FakeAudioContext();
+  const mix = await buildExportAudio({
+    createAudioContext: () => ctx,
+    video: {},
+    music: null,
+    firstClip: makeClip("a", "a.mp4", null, 10),
+    audioClips: [fakeAudioClip({ start: 5, duration: 10, volume: 0.8 })],
+  });
+  assert.equal(ctx.sources.length, 1);
+  const source = ctx.sources[0];
+  assert.equal(source.loop, false);
+  assert.equal(source.startWhen, 5);
+  assert.equal(source.stopWhen, 15);
+  assert.equal(mix.audioSources[0], source);
 });

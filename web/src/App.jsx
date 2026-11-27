@@ -172,13 +172,16 @@ export default function App() {
 
   // One audio element per audio clip, kept in a map so the preview
   // can start and stop each clip on its own. Elements for clips
-  // that are gone get paused and dropped.
+  // that are gone get paused and dropped. Each element loops, so a
+  // short clip keeps playing over a sped up stretch instead of
+  // running out and going quiet.
   useEffect(() => {
     const els = audioElsRef.current;
     for (const clip of audioClips) {
       let el = els.get(clip.id);
       if (!el) {
         el = new Audio();
+        el.loop = true;
         els.set(clip.id, el);
       }
       if (el.dataset.track !== clip.url) {
@@ -202,9 +205,10 @@ export default function App() {
   // picks it up from there. The clip plays at the speed of the video
   // clip under the playhead, and the spot in its file is worked out
   // from that speed, so a voiceover keeps pace with a sped up or
-  // slowed down video instead of drifting and getting cut off. A
-  // clip whose file has already run out stays quiet rather than
-  // starting over from the top.
+  // slowed down video instead of drifting and getting cut off. When
+  // the file runs out over a sped up stretch the offset wraps back
+  // to the start of the file, so the clip loops and keeps playing
+  // for its full length instead of going quiet.
   useEffect(() => {
     for (const clip of audioClips) {
       const el = audioElsRef.current.get(clip.id);
@@ -213,19 +217,16 @@ export default function App() {
       const active = offset >= 0 && offset < clip.duration;
       const rate = audioRateAtTime(packed, playhead);
       if (el.playbackRate !== rate) el.playbackRate = rate;
-      const fileOffset = audioFileOffset(clip, packed, playhead);
-      const fileEnded =
-        Number.isFinite(el.duration) && el.duration > 0 && fileOffset >= el.duration - 0.05;
-      const seekTo =
-        Number.isFinite(el.duration) && el.duration > 0
-          ? Math.min(fileOffset, Math.max(0, el.duration - 0.05))
-          : fileOffset;
-      if (playing && active && !fileEnded) {
+      const fileDuration =
+        Number.isFinite(el.duration) && el.duration > 0 ? el.duration : undefined;
+      const fileOffset = audioFileOffset(clip, packed, playhead, fileDuration);
+      const seekTo = fileDuration ? Math.min(fileOffset, Math.max(0, fileDuration - 0.05)) : fileOffset;
+      if (playing && active) {
         if (Math.abs(el.currentTime - seekTo) > 0.3) el.currentTime = seekTo;
         if (el.paused) el.play().catch(() => {});
       } else {
         el.pause();
-        if (!playing && active && !fileEnded && Math.abs(el.currentTime - seekTo) > 0.3) {
+        if (!playing && active && Math.abs(el.currentTime - seekTo) > 0.3) {
           el.currentTime = seekTo;
         }
       }
