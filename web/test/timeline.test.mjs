@@ -52,6 +52,7 @@ import {
   snapshotState,
   splitAudioClips,
   splitClip,
+  splitSecondId,
   toggleAudioClipMuted,
   toggleClipMuted,
   totalDuration,
@@ -82,10 +83,60 @@ test("trim shortens and reflows", () => {
 test("split makes two clips", () => {
   const out = splitClip(twoClips(), "a", 4);
   assert.equal(out.length, 3);
+  assert.equal(out[1].id, "a-s1");
   assert.equal(clipDuration(out[0]), 4);
   assert.equal(clipDuration(out[1]), 6);
   assert.equal(out[1].sourceIn, 4);
   assert.equal(totalDuration(out), 16);
+});
+
+// Splitting a split clip used to nest the ids, "clip-1-b-b" and
+// worse with every cut. Now the second half is numbered off the
+// base id, so the ids stay short however often a clip is cut.
+test("splitting a split clip twice keeps ids short and unique", () => {
+  const clips = [makeClip("clip-1", "a.mp4", null, 10)];
+  const once = splitClip(clips, "clip-1", 4);
+  assert.deepEqual(
+    once.map((c) => c.id),
+    ["clip-1", "clip-1-s1"],
+  );
+  const twice = splitClip(once, "clip-1-s1", 7);
+  assert.deepEqual(
+    twice.map((c) => c.id),
+    ["clip-1", "clip-1-s1", "clip-1-s2"],
+  );
+  const thrice = splitClip(twice, "clip-1-s2", 8.5);
+  assert.deepEqual(
+    thrice.map((c) => [c.id, c.sourceIn, c.sourceOut]),
+    [
+      ["clip-1", 0, 4],
+      ["clip-1-s1", 4, 7],
+      ["clip-1-s2", 7, 8.5],
+      ["clip-1-s3", 8.5, 10],
+    ],
+  );
+  assert.equal(totalDuration(thrice), 10);
+  assert.equal(new Set(thrice.map((c) => c.id)).size, 4);
+  assert.ok(thrice.every((c) => !c.id.includes("-b") && c.id.length <= "clip-1-s3".length));
+  // Cutting the first half again skips the numbers already taken.
+  const again = splitClip(thrice, "clip-1", 2);
+  assert.deepEqual(
+    again.map((c) => c.id),
+    ["clip-1", "clip-1-s4", "clip-1-s1", "clip-1-s2", "clip-1-s3"],
+  );
+  assert.equal(totalDuration(again), 10);
+});
+
+test("split ids number off the base and skip taken numbers", () => {
+  assert.equal(splitSecondId("clip-1", new Set()), "clip-1-s1");
+  assert.equal(splitSecondId("clip-1", new Set(["clip-1-s1"])), "clip-1-s2");
+  assert.equal(
+    splitSecondId("clip-1-s2", new Set(["clip-1", "clip-1-s1", "clip-1-s2"])),
+    "clip-1-s3",
+  );
+  // A clip saved by the old scheme, with nested "-b" ids, gets a
+  // clean number the next time it is cut.
+  assert.equal(splitSecondId("clip-1-b-b", new Set(["clip-1"])), "clip-1-s1");
 });
 
 test("split outside a clip returns null", () => {
@@ -110,7 +161,25 @@ test("cutRange removes the middle of a clip", () => {
   const clips = [makeClip("a", "a.mp4", null, 20)];
   const out = cutRange(clips, 5, 10);
   assert.equal(out.length, 2);
+  assert.equal(out[1].id, "a-s1");
   assert.equal(totalDuration(out), 15);
+});
+
+// Cutting a cut clip again numbers the new half off the base id,
+// it does not nest the way the old "-b" ids did.
+test("cutRange on a cut clip keeps ids short", () => {
+  const clips = [makeClip("a", "a.mp4", null, 20)];
+  const once = cutRange(clips, 5, 10);
+  const twice = cutRange(once, 8, 12);
+  assert.deepEqual(
+    twice.map((c) => [c.id, c.sourceIn, c.sourceOut]),
+    [
+      ["a", 0, 5],
+      ["a-s1", 10, 13],
+      ["a-s2", 17, 20],
+    ],
+  );
+  assert.equal(totalDuration(twice), 11);
 });
 
 test("cutRange across two clips", () => {
@@ -563,7 +632,7 @@ test("shifting audio clips follows the cuts", () => {
     out.map((c) => [c.id, c.start, c.duration]),
     [
       ["early", 1, 1],
-      ["straddler-b", 3.5, 1.5],
+      ["straddler-s1", 3.5, 1.5],
       ["late", 6, 2],
     ],
   );
@@ -586,8 +655,8 @@ test("shifting audio clips across two cuts splits the long one", () => {
     out.map((c) => [c.id, c.start, c.duration, c.sourceIn]),
     [
       ["a", 0, 2, 0],
-      ["a-b-b", 2, 4, 4],
-      ["a-b-b-b-b", 6, 10, 10],
+      ["a-s2", 2, 4, 4],
+      ["a-s4", 6, 10, 10],
     ],
   );
   const gone = shiftAudioClips([makeAudioClip("b", "b.mp3", null, 3, 1)], [{ start: 2, end: 4 }]);
@@ -650,7 +719,7 @@ test("splitting an audio clip at a point makes two clips", () => {
     out.map((c) => [c.id, c.start, c.duration, c.sourceIn]),
     [
       ["voice", 2, 2, 0],
-      ["voice-b", 4, 3, 2],
+      ["voice-s1", 4, 3, 2],
     ],
   );
   for (const half of out) {
@@ -663,6 +732,26 @@ test("splitting an audio clip at a point makes two clips", () => {
   // same spot the unsplit clip would be at.
   assert.equal(audioFileOffset(out[1], [], 6), 4);
   assert.equal(audioFileOffset(out[1], [], 6), audioFileOffset(clip, [], 6));
+});
+
+test("splitting an audio clip twice keeps ids short and unique", () => {
+  const clip = makeAudioClip("voice", "voice.mp3", null, 0, 10);
+  const once = splitAudioClips([clip], 4);
+  assert.deepEqual(
+    once.map((c) => c.id),
+    ["voice", "voice-s1"],
+  );
+  const twice = splitAudioClips(once, 7);
+  assert.deepEqual(
+    twice.map((c) => [c.id, c.start, c.duration, c.sourceIn]),
+    [
+      ["voice", 0, 4, 0],
+      ["voice-s1", 4, 3, 4],
+      ["voice-s2", 7, 3, 7],
+    ],
+  );
+  assert.equal(new Set(twice.map((c) => c.id)).size, 3);
+  assert.ok(twice.every((c) => !c.id.includes("-b")));
 });
 
 test("splitting an audio clip at its edges leaves it alone", () => {
@@ -703,7 +792,7 @@ test("a cut in the middle of an audio clip splits it and resumes past the cut", 
     out.map((c) => [c.id, c.start, c.duration, c.sourceIn]),
     [
       ["voice", 0, 5, 0],
-      ["voice-b-b", 5, 10, 10],
+      ["voice-s2", 5, 10, 10],
     ],
   );
 });

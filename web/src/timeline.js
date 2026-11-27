@@ -159,6 +159,21 @@ export function trimClip(clips, id, newIn, newOut) {
   });
 }
 
+// Split ids stay short no matter how many times a clip is cut.
+// The first half keeps the clip id, the second half gets the base
+// id plus a split number, so splitting a split clip gives
+// "clip-1-s2" instead of "clip-1-b-b". The number is the lowest
+// one not already used on the timeline, so ids stay unique even
+// when a clip is split again and again. Old ids ending in "-b"
+// count as split ids too, so a clip saved by the old scheme gets
+// a clean number the next time it is cut.
+export function splitSecondId(id, usedIds) {
+  const base = String(id).replace(/(-b|-s\d+)+$/, "");
+  let n = 1;
+  while (usedIds.has(`${base}-s${n}`)) n += 1;
+  return `${base}-s${n}`;
+}
+
 export function splitClip(clips, id, at) {
   const packed = packClips(clips);
   const idx = packed.findIndex((c) => c.id === id);
@@ -170,7 +185,7 @@ export function splitClip(clips, id, at) {
   const first = { ...clip, sourceOut: cutSource };
   const second = {
     ...clip,
-    id: `${clip.id}-b`,
+    id: splitSecondId(clip.id, new Set(packed.map((c) => c.id))),
     sourceIn: cutSource,
     sourceOut: clip.sourceOut,
     fadeIn: 0,
@@ -199,6 +214,7 @@ export function moveClip(clips, id, newIndex) {
 export function cutRange(clips, start, end) {
   if (end <= start) return clips;
   const packed = packClips(clips);
+  const used = new Set(packed.map((c) => c.id));
   const out = [];
   for (const clip of packed) {
     const clipStart = clip.start;
@@ -223,7 +239,9 @@ export function cutRange(clips, start, end) {
     const cutIn = clip.sourceIn + (start - clipStart) * clip.speed;
     const cutOut = clip.sourceIn + (end - clipStart) * clip.speed;
     out.push(stripStart({ ...clip, sourceOut: cutIn }));
-    out.push(stripStart({ ...clip, id: `${clip.id}-b`, sourceIn: cutOut }));
+    const secondId = splitSecondId(clip.id, used);
+    used.add(secondId);
+    out.push(stripStart({ ...clip, id: secondId, sourceIn: cutOut }));
   }
   return out;
 }
@@ -559,6 +577,7 @@ export function toggleAudioClipMuted(clips, id) {
 // straddling the point the track comes back as it was.
 export function splitAudioClips(clips, at, videoClips) {
   if (!clips.length) return clips;
+  const used = new Set(clips.map((c) => c.id));
   let changed = false;
   const out = [];
   for (const clip of clips) {
@@ -569,9 +588,11 @@ export function splitAudioClips(clips, at, videoClips) {
     }
     changed = true;
     const first = { ...clip, duration: at - clip.start };
+    const secondId = splitSecondId(clip.id, used);
+    used.add(secondId);
     const second = {
       ...clip,
-      id: `${clip.id}-b`,
+      id: secondId,
       start: at,
       duration: end - at,
       sourceIn: audioFileOffset(clip, videoClips, at),
