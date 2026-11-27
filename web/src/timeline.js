@@ -470,8 +470,11 @@ export function musicLastLoopLength(trackDuration, editDuration) {
 // the preview and the export can treat them all the same way.
 
 // Make one audio clip. The start and duration are clamped to zero
-// or more, the volume to the 0 to 1 range.
-export function makeAudioClip(id, name, url, start, duration, volume = 1) {
+// or more, the volume to the 0 to 1 range. sourceIn is where in the
+// file the clip starts, so a clip trimmed from the left picks up
+// partway through its file instead of starting over. Old clips
+// without one count as starting at the beginning.
+export function makeAudioClip(id, name, url, start, duration, volume = 1, sourceIn = 0) {
   return {
     id,
     name,
@@ -480,7 +483,15 @@ export function makeAudioClip(id, name, url, start, duration, volume = 1) {
     duration: Math.max(0, duration || 0),
     volume: clampAudioVolume(volume),
     muted: false,
+    sourceIn: Math.max(0, sourceIn || 0),
   };
+}
+
+// Where in its file an audio clip starts. Clips saved before the
+// offset existed have none, so they count as starting at zero.
+export function audioClipSourceIn(clip) {
+  if (!clip || !Number.isFinite(clip.sourceIn)) return 0;
+  return Math.max(0, clip.sourceIn);
 }
 
 // Clamp an audio clip volume to the 0 to 1 range. Bad input falls
@@ -538,14 +549,40 @@ export function toggleAudioClipMuted(clips, id) {
 // Move audio clips to match a timeline with ranges cut out of it.
 // A clip that sat fully inside a cut range goes away, one that
 // straddled a cut gets shorter, the rest shift earlier by the cut
-// time. Reuses shiftTimedItems, then turns the end back into a
-// duration.
-export function shiftAudioClips(clips, ranges) {
-  const withEnds = clips.map((c) => ({ ...c, end: c.start + c.duration }));
-  return shiftTimedItems(withEnds, ranges).map(({ end, ...c }) => ({
-    ...c,
-    duration: end - c.start,
-  }));
+// time. A clip whose start sat inside a cut range loses its left
+// end, and the file seconds that left end used up move into the
+// source offset, so the clip resumes partway through its file
+// instead of starting over. The offset is worked out at the video
+// speed under the cut part, the same way the preview seeks, so a
+// trimmed bit under a sped up clip counts double. Pass the video
+// clips when you have them, so the speed is known; without them
+// the trim counts at normal speed.
+export function shiftAudioClips(clips, ranges, videoClips) {
+  const sorted = [...ranges].sort((a, b) => a.start - b.start);
+  const cutBefore = (t) => {
+    let cut = 0;
+    for (const r of sorted) {
+      if (r.start >= t) break;
+      cut += Math.min(r.end, t) - r.start;
+    }
+    return cut;
+  };
+  const out = [];
+  for (const clip of clips) {
+    const start = clip.start - cutBefore(clip.start);
+    const end = clip.start + clip.duration - cutBefore(clip.start + clip.duration);
+    if (end <= start) continue;
+    let sourceIn = audioClipSourceIn(clip);
+    const containing = sorted.find((r) => clip.start >= r.start && clip.start < r.end);
+    if (containing) {
+      // The clip resumes where the cut ends, so its new source
+      // offset is the file position at that point, which already
+      // counts from the old offset.
+      sourceIn = audioFileOffset(clip, videoClips, containing.end);
+    }
+    out.push({ ...clip, start, duration: end - start, sourceIn });
+  }
+  return out;
 }
 
 // Keep only the first target seconds of the audio track. Clips past
@@ -626,18 +663,19 @@ export function audioRateSegments(audioClip, videoClips) {
 }
 
 // Where in its file an audio clip should be, at a point on the
-// timeline. Each timeline second under a sped up clip counts for
-// more file seconds, so this adds up the rate over every stretch
-// from the clip start to that point. Before the clip it is zero,
-// past the end it stops at the end, so a seek never runs past
-// what the clip covers. When the file length is given and the
+// timeline. The clip starts at its source offset in the file, then
+// each timeline second under a sped up clip counts for more file
+// seconds, so this adds up the rate over every stretch from the
+// clip start to that point. Before the clip it is the source
+// offset, past the end it stops at the end, so a seek never runs
+// past what the clip covers. When the file length is given and the
 // clip needs more file than it holds, the clip loops, so the
 // offset wraps back to the start of the file instead of running
 // past the end.
 export function audioFileOffset(audioClip, videoClips, time, fileDuration) {
   if (!audioClip) return 0;
   const end = Math.min(Math.max(time, audioClip.start), audioClip.start + audioClip.duration);
-  let offset = 0;
+  let offset = audioClipSourceIn(audioClip);
   for (const seg of audioRateSegments(audioClip, videoClips)) {
     const s = Math.max(seg.start, audioClip.start);
     const e = Math.min(seg.end, end);
@@ -664,10 +702,13 @@ export function audioFileSeconds(audioClip, videoClips) {
 // How many times the file has to play to fill the clip. One when
 // the file covers it, more when a sped up stretch needs more file
 // than the clip holds. Zero when the file length is unknown or the
-// clip needs nothing, so the caller can leave looping alone.
+// clip needs nothing, so the caller can leave looping alone. A
+// clip that starts partway through its file has less file left
+// before the first wrap, so the source offset counts towards the
+// total file the clip needs.
 export function audioClipLoops(audioClip, videoClips, fileDuration) {
   if (!Number.isFinite(fileDuration) || fileDuration <= 0) return 0;
-  const needed = audioFileSeconds(audioClip, videoClips);
+  const needed = audioClipSourceIn(audioClip) + audioFileSeconds(audioClip, videoClips);
   if (needed <= 0) return 0;
   return Math.ceil(needed / fileDuration);
 }
@@ -681,7 +722,8 @@ export function audioClipLoops(audioClip, videoClips, fileDuration) {
 // new end of the edit goes away, one that straddles the end is
 // trimmed to it. With no audio clips there is nothing to move, and
 // with no video clips there is nothing to map against, so the track
-// is left alone.
+// is left alone. A remap only moves a clip, it never trims its
+// left end, so the source offset stays where it was.
 export function respeedAudioClips(audioClips, oldClips, newClips) {
   if (!audioClips.length) return [];
   const oldPacked = packClips(oldClips);

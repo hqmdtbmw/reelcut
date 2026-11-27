@@ -205,10 +205,12 @@ export default function App() {
   // picks it up from there. The clip plays at the speed of the video
   // clip under the playhead, and the spot in its file is worked out
   // from that speed, so a voiceover keeps pace with a sped up or
-  // slowed down video instead of drifting and getting cut off. When
-  // the file runs out over a sped up stretch the offset wraps back
-  // to the start of the file, so the clip loops and keeps playing
-  // for its full length instead of going quiet.
+  // slowed down video instead of drifting and getting cut off. A
+  // clip trimmed from the left starts from its source offset in
+  // the file, not from the beginning. When the file runs out over
+  // a sped up stretch the offset wraps back to the start of the
+  // file, so the clip loops and keeps playing for its full length
+  // instead of going quiet.
   useEffect(() => {
     for (const clip of audioClips) {
       const el = audioElsRef.current.get(clip.id);
@@ -629,7 +631,7 @@ export default function App() {
       setClips(next);
       // The audio track moves with the cuts, the same as the captions
       // and text do, so a voiceover stays lined up with the video.
-      setAudioClips((prev) => shiftAudioClips(prev, allRanges));
+      setAudioClips((prev) => shiftAudioClips(prev, allRanges, clips));
       seek(0);
       const audioNote = audioClipsRef.current.length ? " The audio track moved with the cuts." : "";
       setAgentSay(`Removed ${allRanges.length} silent ${allRanges.length === 1 ? "stretch" : "stretches"}, ${removed.toFixed(1)} seconds in total. The edit is tighter now.${audioNote}`);
@@ -667,7 +669,7 @@ export default function App() {
     setClips(next);
     setCaptions((prev) => shiftTimedItems(prev, ranges));
     setOverlays((prev) => shiftTimedItems(prev, ranges));
-    setAudioClips((prev) => shiftAudioClips(prev, ranges));
+    setAudioClips((prev) => shiftAudioClips(prev, ranges, clips));
     seek(0);
     const audioNote = audioClipsRef.current.length ? " The audio track moved with the cuts." : "";
     setAgentSay(
@@ -755,7 +757,7 @@ export default function App() {
         const seconds = Math.min(parsed.seconds, total);
         recordHistory();
         setClips(cutRange(clips, 0, seconds));
-        setAudioClips((prev) => shiftAudioClips(prev, [{ start: 0, end: seconds }]));
+        setAudioClips((prev) => shiftAudioClips(prev, [{ start: 0, end: seconds }], clips));
         seek(0);
         setAgentSay(`Cut the first ${seconds} seconds.`);
         return;

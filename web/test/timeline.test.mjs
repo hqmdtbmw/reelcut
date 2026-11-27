@@ -6,6 +6,7 @@ import {
   adjustClipVolume,
   audioClipsAtTime,
   audioClipLoops,
+  audioClipSourceIn,
   audioFileOffset,
   audioFileSeconds,
   audioRateAtTime,
@@ -491,6 +492,16 @@ test("an audio clip clamps its start, duration and volume", () => {
   assert.equal(makeAudioClip("b", "x.mp3", null, 1, 0).duration, 0);
 });
 
+test("an audio clip keeps its source offset, or starts at zero", () => {
+  const clip = makeAudioClip("a", "voice.mp3", null, 2, 5, 1, 3);
+  assert.equal(clip.sourceIn, 3);
+  assert.equal(makeAudioClip("b", "x.mp3", null, 2, 5).sourceIn, 0);
+  assert.equal(makeAudioClip("c", "x.mp3", null, 2, 5, 1, -2).sourceIn, 0);
+  assert.equal(audioClipSourceIn({}), 0);
+  assert.equal(audioClipSourceIn({ sourceIn: -1 }), 0);
+  assert.equal(audioClipSourceIn({ sourceIn: 2.5 }), 2.5);
+});
+
 test("audio volume clamps to 0 to 1", () => {
   assert.equal(clampAudioVolume(0.5), 0.5);
   assert.equal(clampAudioVolume(2), 1);
@@ -568,6 +579,50 @@ test("shifting audio clips across two cuts drops the fully cut one", () => {
   assert.equal(out[0].duration, 16);
   const gone = shiftAudioClips([makeAudioClip("b", "b.mp3", null, 3, 1)], [{ start: 2, end: 4 }]);
   assert.deepEqual(gone, []);
+});
+
+// A cut that trims the left of an audio clip moves the trimmed
+// seconds into the source offset, so the clip resumes partway
+// through its file instead of starting over.
+
+test("a cut from the left moves the trimmed bit into the source offset", () => {
+  const clips = [makeAudioClip("a", "a.mp3", null, 2, 5)];
+  const out = shiftAudioClips(clips, [{ start: 0, end: 4 }]);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].start, 0);
+  assert.equal(out[0].duration, 3);
+  assert.equal(out[0].sourceIn, 2);
+});
+
+test("a cut from the left adds to a source offset the clip already had", () => {
+  const clip = makeAudioClip("a", "a.mp3", null, 2, 5, 1, 3);
+  const out = shiftAudioClips([clip], [{ start: 0, end: 4 }]);
+  assert.equal(out[0].start, 0);
+  assert.equal(out[0].duration, 3);
+  assert.equal(out[0].sourceIn, 5);
+});
+
+test("a cut from the left counts sped up seconds twice", () => {
+  // The clip sits over a 2x video clip, so cutting its first 2
+  // timeline seconds takes 4 file seconds off the front.
+  const clips = [makeAudioClip("a", "a.mp3", null, 0, 5)];
+  const out = shiftAudioClips(clips, [{ start: 0, end: 2 }], respeedTo(2));
+  assert.equal(out[0].start, 0);
+  assert.equal(out[0].duration, 3);
+  assert.equal(out[0].sourceIn, 4);
+});
+
+test("a cut from the right leaves the source offset alone", () => {
+  const clip = makeAudioClip("a", "a.mp3", null, 2, 5, 1, 3);
+  const out = shiftAudioClips([clip], [{ start: 5, end: 7 }]);
+  assert.equal(out[0].start, 2);
+  assert.equal(out[0].duration, 3);
+  assert.equal(out[0].sourceIn, 3);
+  const untouched = shiftAudioClips([makeAudioClip("b", "b.mp3", null, 10, 2)], [
+    { start: 2, end: 4 },
+  ]);
+  assert.equal(untouched[0].start, 8);
+  assert.equal(untouched[0].sourceIn, 0);
 });
 
 test("a cutdown trims and drops audio clips at the target", () => {
@@ -823,6 +878,12 @@ test("an audio clip counts how many times its file has to play", () => {
   assert.equal(audioClipLoops(voice, respeedTo(2), 0), 0);
   assert.equal(audioClipLoops(voice, respeedTo(2), undefined), 0);
   assert.equal(audioClipLoops(null, [], 2), 0);
+  // A clip starting 8 seconds into a 10 second file has only 2
+  // seconds left before it wraps, so 5 file seconds take 2 plays
+  // even though the file is longer than the clip needs on its own.
+  const trimmed = makeAudioClip("voice", "voice.mp3", null, 2, 5, 1, 8);
+  assert.equal(audioClipLoops(trimmed, [], 10), 2);
+  assert.equal(audioClipLoops(trimmed, [], 20), 1);
 });
 
 test("the file offset wraps back to the start when the clip loops", () => {
@@ -848,4 +909,25 @@ test("the file offset is unwrapped when the file length is unknown", () => {
   assert.equal(audioFileOffset(voice, respeedTo(2), 4.5), 5);
   assert.equal(audioFileOffset(voice, respeedTo(2), 4.5, 0), 5);
   assert.equal(audioFileOffset(voice, respeedTo(2), 4.5, NaN), 5);
+});
+
+test("the file offset starts at the clip's source offset", () => {
+  // A clip trimmed from the left resumes 3 seconds into its file,
+  // so at its start the offset is 3, a second in it is 4, and past
+  // the end it stops at the end of what the clip covers.
+  const voice = makeAudioClip("voice", "voice.mp3", null, 2, 5, 1, 3);
+  assert.equal(audioFileOffset(voice, [], 2), 3);
+  assert.equal(audioFileOffset(voice, [], 3), 4);
+  assert.equal(audioFileOffset(voice, [], 7), 8);
+  assert.equal(audioFileOffset(voice, [], 9), 8);
+});
+
+test("the file offset wraps from the source offset when the clip loops", () => {
+  // A 10 second file, the clip starts 8 seconds in and needs 5
+  // file seconds: it plays 8 to 10, wraps, and ends 3 seconds into
+  // its second play.
+  const voice = makeAudioClip("voice", "voice.mp3", null, 2, 5, 1, 8);
+  assert.equal(audioFileOffset(voice, [], 2, 10), 8);
+  assert.equal(audioFileOffset(voice, [], 4, 10), 0);
+  assert.equal(audioFileOffset(voice, [], 7, 10), 3);
 });

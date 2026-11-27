@@ -1,4 +1,4 @@
-import { audioClipLoops, audioRateSegments, clampMusicVolume, effectiveVolume } from "./timeline.js";
+import { audioClipLoops, audioClipSourceIn, audioRateSegments, clampMusicVolume, effectiveVolume } from "./timeline.js";
 
 // The export draws video frames to a canvas and records them, but
 // the canvas has no sound of its own. This builds the audio side:
@@ -9,9 +9,11 @@ import { audioClipLoops, audioRateSegments, clampMusicVolume, effectiveVolume } 
 // destination, whose track goes on the export stream.
 //
 // An audio clip starts at its place on the timeline, since the
-// export plays in real time from zero, and it plays from the start
-// of its file. A clip that would not decode is left out, losing
-// one clip is better than losing everything.
+// export plays in real time from zero, and it plays from its source
+// offset in its file, so a clip trimmed from the left resumes
+// partway through instead of starting over. A clip that would not
+// decode is left out, losing one clip is better than losing
+// everything.
 //
 // It works with or without music. Before this, the no-music path
 // grabbed audio from a preview element that never played, so those
@@ -88,7 +90,12 @@ export async function buildExportAudio({ createAudioContext, video, music, first
       gain.gain.value = effectiveVolume(clip);
       source.connect(gain);
       gain.connect(dest);
-      source.start(context.currentTime + clip.start, 0);
+      // Start at the clip's source offset in its file, wrapped to
+      // the file length, so a trimmed clip resumes partway through.
+      // With looping on, the source wraps to the file start after
+      // the first pass, the same as the preview does.
+      const startOffset = decoded.duration > 0 ? audioClipSourceIn(clip) % decoded.duration : 0;
+      source.start(context.currentTime + clip.start, startOffset);
       if (typeof source.stop === "function") {
         source.stop(context.currentTime + clip.start + clip.duration);
       }

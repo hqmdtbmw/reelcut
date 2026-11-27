@@ -99,7 +99,7 @@ function fakeMusic(volume = 0.5) {
   };
 }
 
-function fakeAudioClip({ start = 5, duration = 10, volume = 0.8, muted = false, unreadable = false } = {}) {
+function fakeAudioClip({ start = 5, duration = 10, volume = 0.8, muted = false, unreadable = false, sourceIn = 0 } = {}) {
   return {
     id: "a1",
     name: "voice.mp3",
@@ -108,6 +108,7 @@ function fakeAudioClip({ start = 5, duration = 10, volume = 0.8, muted = false, 
     duration,
     volume,
     muted,
+    sourceIn,
     file: {
       arrayBuffer: async () => {
         if (unreadable) throw new Error("bad file");
@@ -252,6 +253,46 @@ test("an audio clip mixes in at its place on the timeline", async () => {
   assert.deepEqual(source.connectedTo, [gain]);
   assert.deepEqual(gain.connectedTo, [ctx.dest]);
   assert.deepEqual(mix.audioSources, [source]);
+});
+
+test("an audio clip trimmed from the left starts partway through its file", async () => {
+  // A 10 second clip starting 3 seconds into a 30 second file
+  // resumes at 3 seconds in, and it does not loop, since 3 plus 10
+  // still fits inside the file.
+  const ctx = new FakeAudioContext();
+  const clip = makeClip("a", "a.mp4", null, 10);
+  const mix = await buildExportAudio({
+    createAudioContext: () => ctx,
+    video: {},
+    music: null,
+    firstClip: clip,
+    audioClips: [fakeAudioClip({ start: 5, duration: 10, volume: 0.8, sourceIn: 3 })],
+  });
+  assert.equal(ctx.sources.length, 1);
+  const source = ctx.sources[0];
+  assert.equal(source.startWhen, 5);
+  assert.equal(source.startOffset, 3);
+  assert.equal(source.loop, false);
+  assert.equal(mix.audioSources[0], source);
+});
+
+test("an audio clip starting near the end of its file wraps and loops", async () => {
+  // The same clip starting 25 seconds into a 30 second file has
+  // only 5 seconds left before it wraps, so it loops to play 10.
+  const ctx = new FakeAudioContext();
+  const clip = makeClip("a", "a.mp4", null, 10);
+  const mix = await buildExportAudio({
+    createAudioContext: () => ctx,
+    video: {},
+    music: null,
+    firstClip: clip,
+    audioClips: [fakeAudioClip({ start: 5, duration: 10, volume: 0.8, sourceIn: 25 })],
+  });
+  assert.equal(ctx.sources.length, 1);
+  const source = ctx.sources[0];
+  assert.equal(source.startOffset, 25);
+  assert.equal(source.loop, true);
+  assert.equal(mix.audioSources[0], source);
 });
 
 test("a muted audio clip exports silence", async () => {
