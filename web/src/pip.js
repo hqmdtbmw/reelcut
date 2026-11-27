@@ -14,9 +14,36 @@ export const PIP_SIZES = {
 export const PIP_DEFAULT_POSITION = "bottom-right";
 export const PIP_DEFAULT_SIZE = "medium";
 
+// How loud the overlay sounds: its volume from 0 to 1, and a
+// mute flag. Muting keeps the volume, so unmuting brings it
+// straight back, the same way the main clips and the audio track
+// work.
+
+// Clamp an overlay volume to the 0 to 1 range. Bad input falls
+// back to full volume.
+export function clampPipVolume(volume) {
+  if (!Number.isFinite(volume)) return 1;
+  return Math.min(1, Math.max(0, volume));
+}
+
+// Set the overlay volume, leaving the rest alone. Setting the
+// volume above zero also unmutes it, since dragging the slider
+// up is how you turn it back on.
+export function setPipVolume(clip, volume) {
+  const next = clampPipVolume(volume);
+  return { ...clip, volume: next, muted: next > 0 ? false : clip.muted };
+}
+
+// Mute or unmute the overlay, keeping its volume for later.
+// With no second argument it mutes.
+export function setPipMuted(clip, muted = true) {
+  return { ...clip, muted: Boolean(muted) };
+}
+
 // Make one picture in picture clip. It starts at a point on the
 // timeline and plays for its duration, from the start of its file.
-// The corner defaults to bottom right and the size to medium.
+// The corner defaults to bottom right and the size to medium, and
+// it plays at full volume unless you turn it down.
 export function makePipClip(id, name, url, start, duration, position, size, sourceDuration = 0) {
   return {
     id,
@@ -27,6 +54,8 @@ export function makePipClip(id, name, url, start, duration, position, size, sour
     position: PIP_POSITIONS.includes(position) ? position : PIP_DEFAULT_POSITION,
     size: Object.prototype.hasOwnProperty.call(PIP_SIZES, size) ? size : PIP_DEFAULT_SIZE,
     sourceDuration: Math.max(0, sourceDuration || 0),
+    volume: 1,
+    muted: false,
   };
 }
 
@@ -46,6 +75,8 @@ export function clampPipClip(clip, total) {
     duration,
     position: PIP_POSITIONS.includes(clip.position) ? clip.position : PIP_DEFAULT_POSITION,
     size: Object.prototype.hasOwnProperty.call(PIP_SIZES, clip.size) ? clip.size : PIP_DEFAULT_SIZE,
+    volume: clampPipVolume(clip.volume),
+    muted: Boolean(clip.muted),
   };
 }
 

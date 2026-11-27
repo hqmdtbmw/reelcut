@@ -4,8 +4,9 @@ import { audioClipLoops, audioClipSourceIn, audioRateSegments, clampMusicVolume,
 // the canvas has no sound of its own. This builds the audio side:
 // the export video element plays each clip, its sound runs through
 // a gain node that follows the clip's volume and mute, the audio
-// track mixes in beside it, and the background music, when there
-// is any, mixes in on its own gain. All of them feed one
+// track mixes in beside it, the picture in picture overlay mixes
+// in beside that, and the background music, when there is any,
+// mixes in on its own gain. All of them feed one
 // destination, whose track goes on the export stream.
 //
 // An audio clip starts at its place on the timeline, since the
@@ -30,8 +31,14 @@ import { audioClipLoops, audioClipSourceIn, audioRateSegments, clampMusicVolume,
 // loops to fill its slot instead of going quiet halfway through,
 // and every clip stops at the end of its slot, so a long file does
 // not bleed past it. The background music stays at normal speed,
-// it is a bed under the edit, not a voice tied to a clip.
-export async function buildExportAudio({ createAudioContext, video, music, firstClip, audioClips = [], clips = [] }) {
+// it is a bed under the edit, not a voice tied to a clip. The
+// picture in picture overlay works the same way as an audio clip:
+// its file plays from the start at its place on the timeline, at
+// the speed of the video clip underneath, looping when its file
+// runs out before the overlay ends, and stopping at the end of
+// its slot. Its volume and mute follow the same rules as the
+// clip audio, so a muted overlay exports silence.
+export async function buildExportAudio({ createAudioContext, video, music, firstClip, audioClips = [], clips = [], pip = null }) {
   const context = createAudioContext();
   if (context.resume) {
     try {
@@ -104,8 +111,44 @@ export async function buildExportAudio({ createAudioContext, video, music, first
       // That clip would not decode. Leave it out and keep the rest.
     }
   }
+  // The picture in picture overlay has a voice of its own. Its
+  // file plays from the start at its place on the timeline, at
+  // the speed of the video clip underneath, looping when its file
+  // runs out before the overlay ends, and stopping at the end of
+  // its slot, the same as an audio clip does. A file that would
+  // not decode is left out, losing the overlay sound is better
+  // than losing everything.
+  let pipSource = null;
+  if (pip && pip.file && pip.duration > 0) {
+    try {
+      const buf = await pip.file.arrayBuffer();
+      const decoded = await context.decodeAudioData(buf);
+      pipSource = context.createBufferSource();
+      pipSource.buffer = decoded;
+      pipSource.loop = audioClipLoops(pip, clips, decoded.duration) > 1;
+      const segments = audioRateSegments(pip, clips);
+      if (pipSource.playbackRate) {
+        pipSource.playbackRate.value = segments[0] ? segments[0].rate : 1;
+        if (typeof pipSource.playbackRate.setValueAtTime === "function") {
+          for (const seg of segments.slice(1)) {
+            pipSource.playbackRate.setValueAtTime(seg.rate, context.currentTime + seg.start);
+          }
+        }
+      }
+      const gain = context.createGain();
+      gain.gain.value = effectiveVolume(pip);
+      pipSource.connect(gain);
+      gain.connect(dest);
+      pipSource.start(context.currentTime + pip.start, 0);
+      if (typeof pipSource.stop === "function") {
+        pipSource.stop(context.currentTime + pip.start + pip.duration);
+      }
+    } catch {
+      pipSource = null;
+    }
+  }
   const track = dest.stream.getAudioTracks()[0] || null;
-  return { context, clipGain, musicSource, audioSources, track };
+  return { context, clipGain, musicSource, audioSources, pipSource, track };
 }
 
 // Set the clip gain for the clip now playing in the export, so each
@@ -116,12 +159,17 @@ export function setExportClipVolume(mix, clip) {
   }
 }
 
-// Stop the music and the audio track and close the context after
-// an export.
+// Stop the music, the audio track and the picture in picture
+// sound, and close the context after an export.
 export function stopExportAudio(mix) {
   if (!mix) return;
   try {
     mix.musicSource?.stop();
+  } catch {
+    // Already stopped, nothing to do.
+  }
+  try {
+    mix.pipSource?.stop();
   } catch {
     // Already stopped, nothing to do.
   }

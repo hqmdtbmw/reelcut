@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildExportAudio, setExportClipVolume, stopExportAudio } from "../src/exportAudio.js";
 import { makeClip } from "../src/timeline.js";
+import { makePipClip } from "../src/pip.js";
 
 // A small stand-in for the browser AudioContext. It records what
 // connects to what, so the tests can check the mix is wired right
@@ -116,6 +117,19 @@ function fakeAudioClip({ start = 5, duration = 10, volume = 0.8, muted = false, 
       },
     },
   };
+}
+
+function fakePip({ start = 2, duration = 4, volume = 0.9, muted = false, unreadable = false } = {}) {
+  const clip = makePipClip("pip-1", "facecam.mp4", null, start, duration, "bottom-right", "medium", 30);
+  clip.volume = volume;
+  clip.muted = muted;
+  clip.file = {
+    arrayBuffer: async () => {
+      if (unreadable) throw new Error("bad file");
+      return new ArrayBuffer(4);
+    },
+  };
+  return clip;
 }
 
 test("export audio carries the clip sound even with no music", async () => {
@@ -462,4 +476,120 @@ test("an audio clip that fits stops at the end of its slot", async () => {
   assert.equal(source.startWhen, 5);
   assert.equal(source.stopWhen, 15);
   assert.equal(mix.audioSources[0], source);
+});
+
+// The picture in picture overlay: its sound used to be left out
+// of the export entirely, so the overlay played silent.
+
+test("the picture in picture sound mixes into the export", async () => {
+  const ctx = new FakeAudioContext();
+  const clip = makeClip("a", "a.mp4", null, 10);
+  const mix = await buildExportAudio({
+    createAudioContext: () => ctx,
+    video: {},
+    music: null,
+    firstClip: clip,
+    pip: fakePip({ start: 2, duration: 4, volume: 0.9 }),
+  });
+  assert.equal(ctx.sources.length, 1);
+  const source = ctx.sources[0];
+  assert.equal(source.started, true);
+  assert.equal(source.loop, false);
+  // It starts 2 seconds into the export, from the start of its file.
+  assert.equal(source.startWhen, 2);
+  assert.equal(source.startOffset, 0);
+  assert.equal(source.stopWhen, 6);
+  // Its gain sits at the overlay volume and feeds the same mix.
+  const gain = ctx.gains[1];
+  assert.equal(gain.gain.value, 0.9);
+  assert.deepEqual(source.connectedTo, [gain]);
+  assert.deepEqual(gain.connectedTo, [ctx.dest]);
+  assert.equal(mix.pipSource, source);
+});
+
+test("a muted overlay exports silence", async () => {
+  const ctx = new FakeAudioContext();
+  const mix = await buildExportAudio({
+    createAudioContext: () => ctx,
+    video: {},
+    music: null,
+    firstClip: makeClip("a", "a.mp4", null, 10),
+    pip: fakePip({ volume: 0.9, muted: true }),
+  });
+  assert.equal(ctx.gains[1].gain.value, 0);
+  assert.equal(mix.pipSource, ctx.sources[0]);
+});
+
+test("the overlay plays at the speed of the video under it", async () => {
+  const ctx = new FakeAudioContext();
+  const fast = makeClip("a", "a.mp4", null, 10);
+  fast.speed = 2;
+  const mix = await buildExportAudio({
+    createAudioContext: () => ctx,
+    video: {},
+    music: null,
+    firstClip: fast,
+    pip: fakePip({ start: 1, duration: 2, volume: 0.8 }),
+    clips: [fast],
+  });
+  assert.equal(ctx.sources.length, 1);
+  const source = ctx.sources[0];
+  assert.equal(source.playbackRate.value, 2);
+  assert.deepEqual(source.rateChanges, []);
+  assert.equal(source.startWhen, 1);
+  assert.equal(mix.pipSource, source);
+});
+
+test("the overlay loops when its file runs out over a sped-up stretch", async () => {
+  // A 5 second overlay at 2x needs 10 file seconds, but the file
+  // is only 5 seconds long, so it plays twice to fill its slot.
+  const ctx = new FakeAudioContext({ decodedDuration: 5 });
+  const fast = makeClip("a", "a.mp4", null, 10);
+  fast.speed = 2;
+  const mix = await buildExportAudio({
+    createAudioContext: () => ctx,
+    video: {},
+    music: null,
+    firstClip: fast,
+    pip: fakePip({ start: 1, duration: 5, volume: 0.8 }),
+    clips: [fast],
+  });
+  assert.equal(ctx.sources.length, 1);
+  const source = ctx.sources[0];
+  assert.equal(source.loop, true);
+  assert.equal(source.playbackRate.value, 2);
+  assert.equal(source.startWhen, 1);
+  assert.equal(source.stopWhen, 6);
+  assert.equal(mix.pipSource, source);
+});
+
+test("an unreadable overlay file leaves the music and the rest alone", async () => {
+  const ctx = new FakeAudioContext();
+  const mix = await buildExportAudio({
+    createAudioContext: () => ctx,
+    video: {},
+    music: fakeMusic(0.5),
+    firstClip: makeClip("a", "a.mp4", null, 10),
+    pip: fakePip({ unreadable: true }),
+  });
+  assert.equal(mix.pipSource, null);
+  assert.equal(mix.musicSource, ctx.sources[0]);
+  assert.equal(mix.track.kind, "audio");
+});
+
+test("stopping the export stops the overlay sound too", async () => {
+  const ctx = new FakeAudioContext();
+  const mix = await buildExportAudio({
+    createAudioContext: () => ctx,
+    video: {},
+    music: fakeMusic(0.5),
+    firstClip: makeClip("a", "a.mp4", null, 10),
+    audioClips: [fakeAudioClip()],
+    pip: fakePip(),
+  });
+  stopExportAudio(mix);
+  assert.equal(ctx.sources[0].stopped, true);
+  assert.equal(ctx.sources[1].stopped, true);
+  assert.equal(ctx.sources[2].stopped, true);
+  assert.equal(ctx.closed, true);
 });

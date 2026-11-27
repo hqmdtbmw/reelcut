@@ -54,6 +54,8 @@ import {
   pipFileOffset,
   pipRect,
   pipVisibleAtTime,
+  setPipMuted,
+  setPipVolume,
 } from "./pip.js";
 
 let nextId = 1;
@@ -279,11 +281,13 @@ export default function App() {
   }, [playhead, currentClip]);
 
   // Keep the picture in picture video in step with the playhead.
-  // It plays silent, at the speed of the video clip underneath, and
-  // loops when its file runs out before the overlay ends. While
-  // paused it seeks to the right spot, so pressing play picks it up
-  // from there. The element only exists while the overlay is on
-  // screen, so a hidden overlay needs no work here.
+  // It plays at the speed of the video clip underneath, and loops
+  // when its file runs out before the overlay ends. Its sound
+  // plays too, at the overlay volume, so muting it in the panel
+  // quiets the preview. While paused it seeks to the right spot,
+  // so pressing play picks it up from there. The element only
+  // exists while the overlay is on screen, so a hidden overlay
+  // needs no work here.
   useEffect(() => {
     const el = pipVideoRef.current;
     if (!el || !pip) return;
@@ -291,6 +295,7 @@ export default function App() {
       el.dataset.track = pip.url;
       el.src = pip.url;
     }
+    el.volume = effectiveVolume(pip);
     const rate = currentClip ? currentClip.speed : 1;
     if (el.playbackRate !== rate) el.playbackRate = rate;
     const fileDuration = Number.isFinite(el.duration) && el.duration > 0 ? el.duration : undefined;
@@ -1127,9 +1132,11 @@ export default function App() {
     video.muted = false;
     video.crossOrigin = "anonymous";
     // The picture in picture overlay, drawn on top of each frame
-    // while it is on screen. It plays silent and at the speed of
+    // while it is on screen. Its picture plays at the speed of
     // the clip underneath, the same as in the preview, and loops
-    // when its file runs out before the overlay ends.
+    // when its file runs out before the overlay ends. This element
+    // stays muted: its sound comes through the export audio mix,
+    // not through this element.
     const pipVideo = document.createElement("video");
     pipVideo.muted = true;
     pipVideo.loop = true;
@@ -1139,7 +1146,8 @@ export default function App() {
     }
     // Build the export audio mix: the clip sound runs through a gain
     // that follows each clip's volume and mute, the audio track mixes
-    // in beside it, and the music mixes in when there is any. Without
+    // in beside it, the picture in picture sound mixes in beside
+    // that, and the music mixes in when there is any. Without
     // music the mix is still built, so the export is no longer silent.
     let mix = null;
     try {
@@ -1150,6 +1158,7 @@ export default function App() {
         firstClip: packed[0],
         audioClips,
         clips: packed,
+        pip,
       });
     } catch {
       mix = null;
@@ -1379,7 +1388,6 @@ export default function App() {
                   <video
                     ref={pipVideoRef}
                     className="pip-video"
-                    muted
                     loop
                     playsInline
                     preload="auto"
@@ -1511,6 +1519,7 @@ export default function App() {
                   <div className="clip-name">{pip.name}</div>
                   <div className="clip-meta">
                     {formatTime(pip.duration)} · {pip.position.replace("-", " ")} · {pip.size}
+                    {pip.muted ? " · muted" : ""}
                   </div>
                 </div>
               )}
@@ -1864,7 +1873,30 @@ export default function App() {
                     ))}
                   </select>
                 </label>
+                <label>
+                  Volume: {pip.muted ? "muted" : `${Math.round(pip.volume * 100)}%`}
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={pip.volume}
+                    onChange={(e) => {
+                      recordSliderHistory();
+                      setPip(setPipVolume(pip, parseFloat(e.target.value)));
+                    }}
+                  />
+                </label>
                 <div className="row">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      recordHistory();
+                      setPip(setPipMuted(pip, !pip.muted));
+                    }}
+                  >
+                    {pip.muted ? "Unmute overlay" : "Mute overlay"}
+                  </button>
                   <button type="button" onClick={() => pipInputRef.current?.click()}>
                     Change video
                   </button>

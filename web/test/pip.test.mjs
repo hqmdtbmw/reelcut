@@ -3,10 +3,13 @@ import assert from "node:assert/strict";
 import {
   PIP_POSITIONS,
   clampPipClip,
+  clampPipVolume,
   makePipClip,
   pipFileOffset,
   pipRect,
   pipVisibleAtTime,
+  setPipMuted,
+  setPipVolume,
 } from "../src/pip.js";
 
 function pip(start = 2, duration = 4, position = "bottom-right", size = "medium") {
@@ -109,4 +112,49 @@ test("the file offset wraps when the overlay loops", () => {
 
 test("the file offset does not wrap when the file length is unknown", () => {
   assert.equal(pipFileOffset(pip(2, 10), 14), 12);
+});
+
+test("a new overlay clip is full volume and unmuted", () => {
+  const clip = makePipClip("pip-1", "facecam.mp4", null, 2, 4);
+  assert.equal(clip.volume, 1);
+  assert.equal(clip.muted, false);
+});
+
+test("setting the overlay volume clamps it to the 0 to 1 range", () => {
+  assert.equal(setPipVolume(pip(), 0.5).volume, 0.5);
+  assert.equal(setPipVolume(pip(), 2).volume, 1);
+  assert.equal(setPipVolume(pip(), -1).volume, 0);
+  assert.equal(setPipVolume(pip(), "loud").volume, 1);
+});
+
+test("turning the overlay volume up unmutes it, turning it to zero keeps the mute flag", () => {
+  const muted = { ...pip(), volume: 0.6, muted: true };
+  const turnedUp = setPipVolume(muted, 0.5);
+  assert.equal(turnedUp.muted, false);
+  assert.equal(turnedUp.volume, 0.5);
+  const turnedDown = setPipVolume(pip(), 0);
+  assert.equal(turnedDown.volume, 0);
+  assert.equal(turnedDown.muted, false);
+});
+
+test("muting the overlay keeps its volume for later", () => {
+  const muted = setPipMuted(pip(), true);
+  assert.equal(muted.muted, true);
+  assert.equal(muted.volume, 1);
+  assert.equal(setPipMuted(muted, false).muted, false);
+  assert.equal(setPipMuted(pip()).muted, true);
+});
+
+test("clamping fills in volume and mute on an overlay saved before they existed", () => {
+  const old = pip();
+  delete old.volume;
+  delete old.muted;
+  const fixed = clampPipClip(old, 30);
+  assert.equal(fixed.volume, 1);
+  assert.equal(fixed.muted, false);
+  assert.equal(clampPipVolume(2), 1);
+  assert.equal(clampPipVolume(-1), 0);
+  assert.equal(clampPipVolume("loud"), 1);
+  assert.equal(clampPipClip({ ...pip(), volume: 2, muted: "yes" }, 30).volume, 1);
+  assert.equal(clampPipClip({ ...pip(), volume: 2, muted: "yes" }, 30).muted, true);
 });
