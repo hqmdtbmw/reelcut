@@ -29,6 +29,13 @@ export function wasm_cutdown(timeline_json: string, target: number): string;
 export function wasm_detect_silence(samples: Float32Array | number[], sample_rate: number, threshold: number, min_silence_ms: number): string;
 
 /**
+ * Split a clip in a timeline given as JSON, and return the new
+ * timeline as JSON. Returns an empty string when the input does
+ * not parse.
+ */
+export function wasm_split(timeline_json: string, id: string, at: number): string;
+
+/**
  * Total duration of a timeline given as JSON. Returns -1 when the
  * JSON does not parse.
  */
@@ -42,6 +49,7 @@ export interface InitOutput {
     readonly wasm_cut_range: (a: number, b: number, c: number, d: number) => [number, number];
     readonly wasm_cutdown: (a: number, b: number, c: number) => [number, number];
     readonly wasm_detect_silence: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+    readonly wasm_split: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly wasm_timeline_duration: (a: number, b: number) => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_malloc: (a: number, b: number) => number;

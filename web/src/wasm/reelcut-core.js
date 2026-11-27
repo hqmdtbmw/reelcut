@@ -102,6 +102,40 @@ export function wasm_detect_silence(samples, sample_rate, threshold, min_silence
 }
 
 /**
+ * Split a clip in a timeline given as JSON, and return the new
+ * timeline as JSON. Returns an empty string when the input does
+ * not parse.
+ * @param {string} timeline_json
+ * @param {string} id
+ * @param {number} at
+ * @returns {string}
+ */
+export function wasm_split(timeline_json, id, at) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const val3 = +at;
+        let ptr0, len0, ptr1, len1;
+        try {
+            ptr0 = passStringToWasm0(timeline_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            len0 = WASM_VECTOR_LEN;
+            ptr1 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            len1 = WASM_VECTOR_LEN;
+        } catch (e) {
+            if (ptr1) { wasm.__wbindgen_free(ptr1, len1 * 1, 1); }
+            if (ptr0) { wasm.__wbindgen_free(ptr0, len0 * 1, 1); }
+            throw e;
+        }
+        const ret = wasm.wasm_split(ptr0, len0, ptr1, len1, val3);
+        deferred4_0 = ret[0];
+        deferred4_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
  * Total duration of a timeline given as JSON. Returns -1 when the
  * JSON does not parse.
  * @param {string} timeline_json

@@ -5,6 +5,7 @@ export const wasm_boring_ranges: (a: number, b: number, c: number) => [number, n
 export const wasm_cut_range: (a: number, b: number, c: number, d: number) => [number, number];
 export const wasm_cutdown: (a: number, b: number, c: number) => [number, number];
 export const wasm_detect_silence: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+export const wasm_split: (a: number, b: number, c: number, d: number, e: number) => [number, number];
 export const wasm_timeline_duration: (a: number, b: number) => number;
 export const __wbindgen_externrefs: WebAssembly.Table;
 export const __wbindgen_malloc: (a: number, b: number) => number;

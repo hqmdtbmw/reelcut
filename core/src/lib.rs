@@ -185,8 +185,10 @@ impl Timeline {
             source_out: cut_source,
             ..clip.clone()
         };
+        let used: std::collections::HashSet<String> =
+            self.clips.iter().map(|c| c.id.clone()).collect();
         let second = Clip {
-            id: format!("{}-b", clip.id),
+            id: split_second_id(&clip.id, &used),
             name: clip.name.clone(),
             source_in: cut_source,
             source_out: clip.source_out,
@@ -267,6 +269,8 @@ impl Timeline {
             return false;
         }
         let mut i = 0;
+        let mut used: std::collections::HashSet<String> =
+            self.clips.iter().map(|c| c.id.clone()).collect();
         while i < self.clips.len() {
             let clip = self.clips[i].clone();
             let clip_start = clip.start;
@@ -301,8 +305,10 @@ impl Timeline {
                 source_out: cut_in,
                 ..clip.clone()
             };
+            let second_id = split_second_id(&clip.id, &used);
+            used.insert(second_id.clone());
             let second = Clip {
-                id: format!("{}-b", clip.id),
+                id: second_id,
                 source_in: cut_out,
                 ..clip.clone()
             };
@@ -421,6 +427,45 @@ impl Timeline {
     /// Load a timeline from JSON. Returns None when the JSON is invalid.
     pub fn from_json(json: &str) -> Option<Timeline> {
         serde_json::from_str(json).ok()
+    }
+}
+
+/// Strip trailing split suffixes ("-b" or "-s2") from a clip id, so
+/// splitting a split clip numbers off the base id instead of nesting.
+/// A clip saved by the old scheme as "clip-1-b-b" strips back to
+/// "clip-1", the same way the web mirror does.
+fn split_base_id(id: &str) -> &str {
+    let mut base = id;
+    loop {
+        if let Some(stripped) = base.strip_suffix("-b") {
+            base = stripped;
+        } else if let Some(pos) = base.rfind("-s") {
+            let num = &base[pos + 2..];
+            if !num.is_empty() && num.bytes().all(|b| b.is_ascii_digit()) {
+                base = &base[..pos];
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    base
+}
+
+/// The id for the second half of a split: the base id plus the lowest
+/// split number not already used on the timeline. Splitting "a" gives
+/// "a-s1", splitting it again gives "a-s2", and splitting "a-s1"
+/// gives "a-s2" too, never "a-s1-b" or "a-s1-s1".
+fn split_second_id(id: &str, used: &std::collections::HashSet<String>) -> String {
+    let base = split_base_id(id);
+    let mut n = 1;
+    loop {
+        let candidate = format!("{}-s{}", base, n);
+        if !used.contains(&candidate) {
+            return candidate;
+        }
+        n += 1;
     }
 }
 
@@ -605,6 +650,19 @@ pub fn wasm_cutdown(timeline_json: &str, target: f64) -> String {
     timeline.to_json()
 }
 
+/// Split a clip in a timeline given as JSON, and return the new
+/// timeline as JSON. Returns an empty string when the input does
+/// not parse.
+#[wasm_bindgen]
+pub fn wasm_split(timeline_json: &str, id: &str, at: f64) -> String {
+    let mut timeline = match Timeline::from_json(timeline_json) {
+        Some(t) => t,
+        None => return String::new(),
+    };
+    timeline.split(id, at);
+    timeline.to_json()
+}
+
 /// Cut a time range out of a timeline given as JSON, and return the
 /// new timeline as JSON. Returns an empty string when the input does
 /// not parse.
@@ -665,12 +723,69 @@ mod tests {
     fn split_makes_two_clips() {
         let mut t = sample_timeline();
         let second = t.split("a", 4.0);
-        assert_eq!(second, Some("a-b".to_string()));
+        assert_eq!(second, Some("a-s1".to_string()));
         assert_eq!(t.clips.len(), 3);
         assert!((t.clips[0].duration() - 4.0).abs() < 1e-9);
         assert!((t.clips[1].duration() - 6.0).abs() < 1e-9);
         assert!((t.clips[1].source_in - 4.0).abs() < 1e-9);
         assert!((t.total_duration() - 16.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn split_twice_numbers_off_the_base() {
+        let mut t = sample_timeline();
+        assert_eq!(t.split("a", 4.0), Some("a-s1".to_string()));
+        // Splitting the first half again numbers off the base id,
+        // it does not nest the way the old "-b" ids did.
+        assert_eq!(t.split("a", 2.0), Some("a-s2".to_string()));
+        assert_eq!(t.clips.len(), 4);
+        let ids: Vec<&str> = t.clips.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, vec!["a", "a-s2", "a-s1", "b"]);
+        assert!((t.total_duration() - 16.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn split_a_split_clip_keeps_numbering_flat() {
+        let mut t = sample_timeline();
+        assert_eq!(t.split("a", 4.0), Some("a-s1".to_string()));
+        assert_eq!(t.split("a-s1", 7.0), Some("a-s2".to_string()));
+        let ids: Vec<&str> = t.clips.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, vec!["a", "a-s1", "a-s2", "b"]);
+        assert!((t.clips[2].duration() - 3.0).abs() < 1e-9);
+        assert!((t.total_duration() - 16.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn split_old_b_id_gets_a_clean_number() {
+        let mut t = Timeline::new();
+        t.add_clip(Clip::new("a-b", "clip.mp4", 0.0, 10.0, 0.0));
+        assert_eq!(t.split("a-b", 4.0), Some("a-s1".to_string()));
+        assert_eq!(t.clips[0].id, "a-b");
+        assert_eq!(t.clips[1].id, "a-s1");
+    }
+
+    #[test]
+    fn split_reuses_the_lowest_free_number() {
+        let mut t = sample_timeline();
+        assert_eq!(t.split("a", 4.0), Some("a-s1".to_string()));
+        assert_eq!(t.split("a", 2.0), Some("a-s2".to_string()));
+        assert!(t.delete("a-s1"));
+        assert_eq!(t.split("a", 1.0), Some("a-s1".to_string()));
+        let ids: Vec<&str> = t.clips.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, vec!["a", "a-s1", "a-s2", "b"]);
+    }
+
+    #[test]
+    fn cut_a_cut_clip_numbers_off_the_base() {
+        let mut t = Timeline::new();
+        t.add_clip(Clip::new("a", "clip.mp4", 0.0, 20.0, 0.0));
+        assert!(t.cut_range(5.0, 10.0));
+        assert_eq!(t.clips[1].id, "a-s1");
+        // Cutting inside the cut half numbers off the base id too.
+        assert!(t.cut_range(12.0, 14.0));
+        let ids: Vec<&str> = t.clips.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, vec!["a", "a-s1", "a-s2"]);
+        assert!((t.total_duration() - 13.0).abs() < 1e-9);
     }
 
     #[test]
@@ -747,6 +862,7 @@ mod tests {
         t.add_clip(Clip::new("a", "clip.mp4", 0.0, 20.0, 0.0));
         assert!(t.cut_range(5.0, 10.0));
         assert_eq!(t.clips.len(), 2);
+        assert_eq!(t.clips[1].id, "a-s1");
         assert!((t.total_duration() - 15.0).abs() < 1e-9);
         assert!((t.clips[0].source_out - 5.0).abs() < 1e-9);
         assert!((t.clips[1].source_in - 10.0).abs() < 1e-9);
