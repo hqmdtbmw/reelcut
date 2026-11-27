@@ -374,7 +374,8 @@ export function shiftTimedItems(items, ranges) {
 export const HISTORY_LIMIT = 50;
 
 // A plain snapshot of the edit, safe to store and restore later.
-// Old snapshots without an audio track still restore fine.
+// Old snapshots without an audio track still restore fine, and
+// old snapshots without a picture in picture clip count as none.
 export function snapshotState(state) {
   return {
     clips: state.clips.map((c) => ({ ...c, effects: { ...c.effects } })),
@@ -382,6 +383,7 @@ export function snapshotState(state) {
     captions: state.captions.map((c) => ({ ...c })),
     audioClips: (state.audioClips || []).map((c) => ({ ...c })),
     music: state.music ? { ...state.music } : null,
+    pip: state.pip ? { ...state.pip } : null,
   };
 }
 

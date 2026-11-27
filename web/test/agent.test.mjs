@@ -49,6 +49,19 @@ test("add text with timing", () => {
   assert.equal(parsed.end, 5);
 });
 
+test("picture in picture", () => {
+  assert.deepEqual(parseCommand("add picture in picture"), { kind: "add-pip" });
+  assert.deepEqual(parseCommand("remove the picture in picture"), { kind: "remove-pip" });
+  assert.deepEqual(parseCommand("move the picture in picture to the top left"), {
+    kind: "move-pip",
+    position: "top-left",
+  });
+  assert.deepEqual(parseCommand("move the picture in picture to the bottom right"), {
+    kind: "move-pip",
+    position: "bottom-right",
+  });
+});
+
 test("mute and volume", () => {
   assert.deepEqual(parseCommand("mute it"), { kind: "mute" });
   assert.deepEqual(parseCommand("set volume to 50%"), { kind: "set-volume", volume: 0.5 });

@@ -354,6 +354,51 @@ header.top p {
   color: var(--muted);
 }
 
+.pip-video {
+  position: absolute;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  border-radius: 6px;
+  background: #000;
+}
+
+.pip-track {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 6px;
+  min-height: 44px;
+  background: #fafafa;
+}
+
+.pip-block {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  background: #ffe9f3;
+  border: 1px solid #e8a9c4;
+  border-radius: 8px;
+  padding: 4px 8px;
+  min-width: 40px;
+  overflow: hidden;
+  cursor: pointer;
+  user-select: none;
+}
+
+.pip-block .clip-name {
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pip-block .clip-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .clip-actions {
   display: flex;
   gap: 8px;

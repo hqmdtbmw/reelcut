@@ -29,6 +29,12 @@
 //   { kind: "remove-audio-track" }
 //   { kind: "set-effect", effect, mode, value, scope }
 //   { kind: "reset-effects", scope }
+//   { kind: "add-pip" }
+//   { kind: "remove-pip" }
+//   { kind: "move-pip", position }
+// "add picture in picture" opens the file picker, since the app
+// needs a video file to use as the overlay. "move the picture in
+// picture to the top left" takes one of the four corners.
 //   { kind: "unknown", text }
 //
 // context is { clipCount, duration } so the parser can sanity check
@@ -113,6 +119,19 @@ export function parseCommand(rawText, context = {}) {
       start: addText[2] ? parseFloat(addText[2]) : 0,
       end: addText[3] ? parseFloat(addText[3]) : null,
     };
+  }
+
+  if (/picture in picture/.test(text)) {
+    if (/remov|delete|drop|get rid|take .* out/.test(text)) {
+      return { kind: "remove-pip" };
+    }
+    const move = text.match(/to the (top left|top right|bottom left|bottom right)/);
+    if (/move/.test(text) && move) {
+      return { kind: "move-pip", position: move[1].replace(" ", "-") };
+    }
+    if (/add/.test(text)) {
+      return { kind: "add-pip" };
+    }
   }
 
   if (/add (?:some |a |the )?music/.test(text) || /add (?:a |some )?song/.test(text)) {
@@ -255,4 +274,5 @@ export const EXAMPLE_COMMANDS = [
   "mute the audio track",
   "make it brighter",
   "add music",
+  "add picture in picture",
 ];
