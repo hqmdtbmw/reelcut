@@ -1,4 +1,4 @@
-import { clampMusicVolume, effectiveVolume } from "./timeline.js";
+import { audioRateSegments, clampMusicVolume, effectiveVolume } from "./timeline.js";
 
 // The export draws video frames to a canvas and records them, but
 // the canvas has no sound of its own. This builds the audio side:
@@ -16,7 +16,17 @@ import { clampMusicVolume, effectiveVolume } from "./timeline.js";
 // It works with or without music. Before this, the no-music path
 // grabbed audio from a preview element that never played, so those
 // exports came out silent.
-export async function buildExportAudio({ createAudioContext, video, music, firstClip, audioClips = [] }) {
+//
+// Rate matched audio: an audio clip that was squeezed by a speed
+// change has to play faster in the export too, or the voiceover
+// gets cut off. The clip sound baked into the video already does,
+// since the export video element plays at the clip speed. For the
+// audio track, each clip plays at the speed of the video clip under
+// it, changing rate as the export crosses into the next video clip,
+// so the words keep pace all the way through. The background music
+// stays at normal speed, it is a bed under the edit, not a voice
+// tied to a clip.
+export async function buildExportAudio({ createAudioContext, video, music, firstClip, audioClips = [], clips = [] }) {
   const context = createAudioContext();
   if (context.resume) {
     try {
@@ -58,6 +68,15 @@ export async function buildExportAudio({ createAudioContext, video, music, first
       const decoded = await context.decodeAudioData(buf);
       const source = context.createBufferSource();
       source.buffer = decoded;
+      const segments = audioRateSegments(clip, clips);
+      if (source.playbackRate) {
+        source.playbackRate.value = segments[0] ? segments[0].rate : 1;
+        if (typeof source.playbackRate.setValueAtTime === "function") {
+          for (const seg of segments.slice(1)) {
+            source.playbackRate.setValueAtTime(seg.rate, context.currentTime + seg.start);
+          }
+        }
+      }
       const gain = context.createGain();
       gain.gain.value = effectiveVolume(clip);
       source.connect(gain);

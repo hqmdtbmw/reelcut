@@ -565,6 +565,84 @@ export function cutdownAudioClips(clips, target) {
   return out;
 }
 
+// Rate matched audio. When a clip runs at 2x, the words on the
+// audio track have to run at 2x too, or the voiceover gets cut off
+// halfway through. The video element already does this for the
+// sound baked into a clip, since its playbackRate follows the clip
+// speed. The audio track needs the same treatment, and it needs
+// two things: the rate to play at right now, and where in its file
+// that lands, since a timeline second is no longer a file second
+// once a clip is sped up or slowed down.
+
+// A speed as a real playback rate. Bad input falls back to normal
+// speed, the same way the volume clamps fall back to full.
+export function clampSpeed(speed) {
+  if (!Number.isFinite(speed) || speed <= 0) return 1;
+  return speed;
+}
+
+// The rate the audio track should play at, at a point on the
+// timeline: the speed of the video clip under the playhead. No
+// clip there, or no clips at all, means normal speed.
+export function audioRateAtTime(videoClips, time) {
+  const clip = clipAtTime(videoClips, time);
+  return clip ? clampSpeed(clip.speed) : 1;
+}
+
+// The audio track in rate segments: each stretch of one audio clip
+// that sits under a single video clip, with that clip's speed.
+// Stretches with the same rate join up, and a stretch with no
+// video under it plays at normal speed. With no video clips the
+// whole audio clip is one stretch at normal speed.
+export function audioRateSegments(audioClip, videoClips) {
+  if (!audioClip || audioClip.duration <= 0) return [];
+  const start = audioClip.start;
+  const end = audioClip.start + audioClip.duration;
+  const packed = packClips(videoClips || []);
+  const out = [];
+  const push = (s, e, rate) => {
+    if (e <= s) return;
+    const last = out[out.length - 1];
+    if (last && last.rate === rate && last.end === s) last.end = e;
+    else out.push({ start: s, end: e, rate });
+  };
+  if (!packed.length) {
+    push(start, end, 1);
+    return out;
+  }
+  let cursor = start;
+  for (const clip of packed) {
+    const clipStart = clip.start;
+    const clipEnd = clip.start + clipDuration(clip);
+    if (clipEnd <= cursor) continue;
+    if (clipStart > cursor) push(cursor, Math.min(clipStart, end), 1);
+    if (clipStart >= end) break;
+    push(Math.max(clipStart, cursor), Math.min(clipEnd, end), clampSpeed(clip.speed));
+    cursor = Math.min(clipEnd, end);
+    if (cursor >= end) break;
+  }
+  if (cursor < end) push(cursor, end, 1);
+  return out;
+}
+
+// Where in its file an audio clip should be, at a point on the
+// timeline. Each timeline second under a sped up clip counts for
+// more file seconds, so this adds up the rate over every stretch
+// from the clip start to that point. Before the clip it is zero,
+// past the end it stops at the end, so a seek never runs past
+// what the clip covers.
+export function audioFileOffset(audioClip, videoClips, time) {
+  if (!audioClip) return 0;
+  const end = Math.min(Math.max(time, audioClip.start), audioClip.start + audioClip.duration);
+  let offset = 0;
+  for (const seg of audioRateSegments(audioClip, videoClips)) {
+    const s = Math.max(seg.start, audioClip.start);
+    const e = Math.min(seg.end, end);
+    if (e > s) offset += (e - s) * seg.rate;
+  }
+  return offset;
+}
+
 // Move the audio track through a speed change. Speeding the whole
 // edit up or down, or changing one clip's speed, stretches or
 // squeezes the video clips, so a point on the old timeline lands

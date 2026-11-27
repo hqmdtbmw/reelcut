@@ -25,6 +25,13 @@ class FakeSource {
     this.loop = false;
     this.startWhen = null;
     this.startOffset = null;
+    this.rateChanges = [];
+    this.playbackRate = {
+      value: 1,
+      setValueAtTime: (rate, when) => {
+        this.rateChanges.push([rate, when]);
+      },
+    };
   }
   connect(node) {
     this.connectedTo.push(node);
@@ -304,4 +311,63 @@ test("stopping the export stops the audio clips too", async () => {
   assert.equal(ctx.sources[0].stopped, true);
   assert.equal(ctx.sources[1].stopped, true);
   assert.equal(ctx.closed, true);
+});
+
+test("an audio clip exports at the speed of the video under it", async () => {
+  const ctx = new FakeAudioContext();
+  const fast = makeClip("a", "a.mp4", null, 10);
+  fast.speed = 2;
+  const mix = await buildExportAudio({
+    createAudioContext: () => ctx,
+    video: {},
+    music: null,
+    firstClip: fast,
+    audioClips: [fakeAudioClip({ start: 1, duration: 2, volume: 0.8 })],
+    clips: [fast],
+  });
+  assert.equal(ctx.sources.length, 1);
+  const source = ctx.sources[0];
+  assert.equal(source.playbackRate.value, 2);
+  assert.deepEqual(source.rateChanges, []);
+  assert.equal(source.startWhen, 1);
+  assert.equal(mix.audioSources[0], source);
+});
+
+test("an audio clip changes rate as the export crosses into the next clip", async () => {
+  const ctx = new FakeAudioContext();
+  const fast = makeClip("a", "a.mp4", null, 10);
+  fast.speed = 2;
+  const slow = makeClip("b", "b.mp4", null, 10);
+  slow.speed = 0.5;
+  const mix = await buildExportAudio({
+    createAudioContext: () => ctx,
+    video: {},
+    music: null,
+    firstClip: fast,
+    audioClips: [fakeAudioClip({ start: 2, duration: 10, volume: 0.8 })],
+    clips: [fast, slow],
+  });
+  assert.equal(ctx.sources.length, 1);
+  const source = ctx.sources[0];
+  // It starts at 2x under the fast clip, then drops to 0.5x when the
+  // slow clip starts 5 seconds into the export.
+  assert.equal(source.playbackRate.value, 2);
+  assert.deepEqual(source.rateChanges, [[0.5, 5]]);
+  assert.equal(source.startWhen, 2);
+  assert.equal(mix.audioSources[0], source);
+});
+
+test("an audio clip exports at normal speed when no video clips are given", async () => {
+  const ctx = new FakeAudioContext();
+  const mix = await buildExportAudio({
+    createAudioContext: () => ctx,
+    video: {},
+    music: null,
+    firstClip: makeClip("a", "a.mp4", null, 10),
+    audioClips: [fakeAudioClip({ start: 2, duration: 4, volume: 0.6 })],
+  });
+  assert.equal(ctx.sources.length, 1);
+  assert.equal(ctx.sources[0].playbackRate.value, 1);
+  assert.deepEqual(ctx.sources[0].rateChanges, []);
+  assert.equal(mix.audioSources[0], ctx.sources[0]);
 });

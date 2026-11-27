@@ -5,6 +5,9 @@ import {
   adjustClipEffect,
   adjustClipVolume,
   audioClipsAtTime,
+  audioFileOffset,
+  audioRateAtTime,
+  audioRateSegments,
   boringRanges,
   canRedo,
   canUndo,
@@ -12,6 +15,7 @@ import {
   clampClipVolume,
   clampEffect,
   clampMusicVolume,
+  clampSpeed,
   clipDuration,
   clipFilter,
   cutRange,
@@ -719,4 +723,74 @@ test("audio before the changed clip does not move", () => {
       ["after", 11, 1],
     ],
   );
+});
+
+// Rate matched audio: the audio track has to play at the speed of
+// the video clip under the playhead, or a voiceover drifts and
+// gets cut off once the edit is sped up or slowed down.
+
+test("a bad speed falls back to normal speed", () => {
+  assert.equal(clampSpeed(2), 2);
+  assert.equal(clampSpeed(0.5), 0.5);
+  assert.equal(clampSpeed(0), 1);
+  assert.equal(clampSpeed(-1), 1);
+  assert.equal(clampSpeed(NaN), 1);
+  assert.equal(clampSpeed(undefined), 1);
+});
+
+test("the audio rate follows the video clip under the playhead", () => {
+  const clips = twoClips();
+  clips[1].speed = 2;
+  assert.equal(audioRateAtTime(clips, 2), 1);
+  assert.equal(audioRateAtTime(clips, 12), 2);
+  assert.equal(audioRateAtTime(clips, 9.9), 1);
+  assert.equal(audioRateAtTime(clips, 20), 1);
+  assert.equal(audioRateAtTime([], 2), 1);
+});
+
+test("rate segments follow each video clip an audio clip sits under", () => {
+  const clips = twoClips();
+  clips[1].speed = 2;
+  const voice = makeAudioClip("voice", "voice.mp3", null, 8, 5);
+  assert.deepEqual(audioRateSegments(voice, clips), [
+    { start: 8, end: 10, rate: 1 },
+    { start: 10, end: 13, rate: 2 },
+  ]);
+});
+
+test("rate segments join up when neighbouring clips share a speed", () => {
+  const voice = makeAudioClip("voice", "voice.mp3", null, 2, 2.5);
+  assert.deepEqual(audioRateSegments(voice, respeedTo(2)), [{ start: 2, end: 4.5, rate: 2 }]);
+});
+
+test("rate segments fall back to normal speed with no video clips", () => {
+  const voice = makeAudioClip("voice", "voice.mp3", null, 2, 5);
+  assert.deepEqual(audioRateSegments(voice, []), [{ start: 2, end: 7, rate: 1 }]);
+  assert.deepEqual(audioRateSegments(voice), [{ start: 2, end: 7, rate: 1 }]);
+});
+
+test("the file offset counts sped up seconds twice", () => {
+  // A 5 second voiceover squeezed to 2.5 seconds by a 2x edit.
+  const voice = makeAudioClip("voice", "voice.mp3", null, 2, 2.5);
+  assert.equal(audioFileOffset(voice, respeedTo(2), 2), 0);
+  assert.equal(audioFileOffset(voice, respeedTo(2), 3.5), 3);
+  assert.equal(audioFileOffset(voice, respeedTo(2), 4.5), 5);
+  assert.equal(audioFileOffset(voice, respeedTo(2), 9), 5);
+});
+
+test("the file offset adds up across clips at different speeds", () => {
+  const clips = twoClips();
+  clips[1].speed = 2;
+  const voice = makeAudioClip("voice", "voice.mp3", null, 8, 5);
+  assert.equal(audioFileOffset(voice, clips, 8), 0);
+  assert.equal(audioFileOffset(voice, clips, 10), 2);
+  assert.equal(audioFileOffset(voice, clips, 11), 4);
+  assert.equal(audioFileOffset(voice, clips, 13), 8);
+});
+
+test("the file offset is just the timeline offset at normal speed", () => {
+  const voice = makeAudioClip("voice", "voice.mp3", null, 2, 5);
+  assert.equal(audioFileOffset(voice, twoClips(), 4), 2);
+  assert.equal(audioFileOffset(voice, [], 4), 2);
+  assert.equal(audioFileOffset(voice, twoClips(), 1), 0);
 });

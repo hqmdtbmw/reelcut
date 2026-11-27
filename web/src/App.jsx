@@ -3,6 +3,8 @@ import {
   addAudioClip,
   adjustClipEffect,
   adjustClipVolume,
+  audioFileOffset,
+  audioRateAtTime,
   boringRanges,
   canRedo,
   canUndo,
@@ -197,24 +199,38 @@ export default function App() {
   // Keep the audio track in sync with the playhead. A clip only
   // sounds while the playhead is inside it. Scrubbing while paused
   // moves each clip to the right spot in its file, so pressing play
-  // picks it up from there.
+  // picks it up from there. The clip plays at the speed of the video
+  // clip under the playhead, and the spot in its file is worked out
+  // from that speed, so a voiceover keeps pace with a sped up or
+  // slowed down video instead of drifting and getting cut off. A
+  // clip whose file has already run out stays quiet rather than
+  // starting over from the top.
   useEffect(() => {
     for (const clip of audioClips) {
       const el = audioElsRef.current.get(clip.id);
       if (!el) continue;
       const offset = playhead - clip.start;
       const active = offset >= 0 && offset < clip.duration;
-      if (playing && active) {
-        if (Math.abs(el.currentTime - offset) > 0.3) el.currentTime = offset;
+      const rate = audioRateAtTime(packed, playhead);
+      if (el.playbackRate !== rate) el.playbackRate = rate;
+      const fileOffset = audioFileOffset(clip, packed, playhead);
+      const fileEnded =
+        Number.isFinite(el.duration) && el.duration > 0 && fileOffset >= el.duration - 0.05;
+      const seekTo =
+        Number.isFinite(el.duration) && el.duration > 0
+          ? Math.min(fileOffset, Math.max(0, el.duration - 0.05))
+          : fileOffset;
+      if (playing && active && !fileEnded) {
+        if (Math.abs(el.currentTime - seekTo) > 0.3) el.currentTime = seekTo;
         if (el.paused) el.play().catch(() => {});
       } else {
         el.pause();
-        if (!playing && active && Math.abs(el.currentTime - offset) > 0.3) {
-          el.currentTime = offset;
+        if (!playing && active && !fileEnded && Math.abs(el.currentTime - seekTo) > 0.3) {
+          el.currentTime = seekTo;
         }
       }
     }
-  }, [playing, playhead, audioClips]);
+  }, [playing, playhead, audioClips, packed]);
 
   // Keep the preview video on the right clip and the right source time.
   useEffect(() => {
@@ -989,6 +1005,7 @@ export default function App() {
         music,
         firstClip: packed[0],
         audioClips,
+        clips: packed,
       });
     } catch {
       mix = null;
