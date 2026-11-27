@@ -37,6 +37,7 @@ import {
   shiftTimedItems,
   shortcutForEvent,
   snapshotState,
+  splitAudioClips,
   splitClip,
   toggleAudioClipMuted,
   totalDuration,
@@ -524,6 +525,10 @@ export default function App() {
     }
     recordHistory();
     setClips(out);
+    // The audio track splits at the same point, so a voiceover
+    // straddling the cut becomes two clips and the second half
+    // picks up where the words left off.
+    setAudioClips((prev) => splitAudioClips(prev, playhead, clips));
     setAgentSay(`Split ${currentClip.name} at ${formatTime(playhead)}.`);
   }
 
@@ -809,6 +814,7 @@ export default function App() {
         if (!out) return setAgentSay("I could not split there.");
         recordHistory();
         setClips(out);
+        setAudioClips((prev) => splitAudioClips(prev, parsed.seconds, clips));
         setAgentSay(`Split ${clip.name} at ${formatTime(parsed.seconds)}.`);
         return;
       }

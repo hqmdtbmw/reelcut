@@ -50,6 +50,7 @@ import {
   shiftTimedItems,
   shortcutForEvent,
   snapshotState,
+  splitAudioClips,
   splitClip,
   toggleAudioClipMuted,
   toggleClipMuted,
@@ -562,21 +563,33 @@ test("shifting audio clips follows the cuts", () => {
     out.map((c) => [c.id, c.start, c.duration]),
     [
       ["early", 1, 1],
-      ["straddler", 3.5, 1.5],
+      ["straddler-b", 3.5, 1.5],
       ["late", 6, 2],
     ],
   );
+  // The straddler was split at the end of the cut, so the part
+  // after it resumes 1.5 seconds into its file, not from the start.
+  assert.equal(out[1].sourceIn, 1.5);
 });
 
-test("shifting audio clips across two cuts drops the fully cut one", () => {
+test("shifting audio clips across two cuts splits the long one", () => {
   const clips = [makeAudioClip("a", "a.mp3", null, 0, 20)];
   const out = shiftAudioClips(clips, [
     { start: 2, end: 4 },
     { start: 8, end: 10 },
   ]);
-  assert.equal(out.length, 1);
-  assert.equal(out[0].start, 0);
-  assert.equal(out[0].duration, 16);
+  // The cut bits are gone, and what is left is three clips: the
+  // head, the middle, and the tail, each resuming from the file
+  // position where its timeline stretch starts.
+  assert.equal(out.length, 3);
+  assert.deepEqual(
+    out.map((c) => [c.id, c.start, c.duration, c.sourceIn]),
+    [
+      ["a", 0, 2, 0],
+      ["a-b-b", 2, 4, 4],
+      ["a-b-b-b-b", 6, 10, 10],
+    ],
+  );
   const gone = shiftAudioClips([makeAudioClip("b", "b.mp3", null, 3, 1)], [{ start: 2, end: 4 }]);
   assert.deepEqual(gone, []);
 });
@@ -623,6 +636,76 @@ test("a cut from the right leaves the source offset alone", () => {
   ]);
   assert.equal(untouched[0].start, 8);
   assert.equal(untouched[0].sourceIn, 0);
+});
+
+// Splitting an audio clip: the two halves play on from each
+// other, so the split itself changes nothing about how the track
+// sounds, it just lets the halves move on their own afterwards.
+
+test("splitting an audio clip at a point makes two clips", () => {
+  const clip = { ...makeAudioClip("voice", "voice.mp3", null, 2, 5), volume: 0.5, muted: true };
+  const out = splitAudioClips([clip], 4);
+  assert.equal(out.length, 2);
+  assert.deepEqual(
+    out.map((c) => [c.id, c.start, c.duration, c.sourceIn]),
+    [
+      ["voice", 2, 2, 0],
+      ["voice-b", 4, 3, 2],
+    ],
+  );
+  for (const half of out) {
+    assert.equal(half.name, "voice.mp3");
+    assert.equal(half.volume, 0.5);
+    assert.equal(half.muted, true);
+  }
+  // The second half picks up exactly where the first left off:
+  // 4 seconds into the file at 6 seconds on the timeline, the
+  // same spot the unsplit clip would be at.
+  assert.equal(audioFileOffset(out[1], [], 6), 4);
+  assert.equal(audioFileOffset(out[1], [], 6), audioFileOffset(clip, [], 6));
+});
+
+test("splitting an audio clip at its edges leaves it alone", () => {
+  const clips = [makeAudioClip("voice", "voice.mp3", null, 2, 5)];
+  assert.equal(splitAudioClips(clips, 2), clips);
+  assert.equal(splitAudioClips(clips, 7), clips);
+  assert.equal(splitAudioClips(clips, 0), clips);
+  assert.deepEqual(splitAudioClips([], 4), []);
+});
+
+test("splitting an audio clip under a sped up video counts the speed", () => {
+  // The first 2 timeline seconds sit under a 2x clip, so the
+  // second half resumes 4 file seconds in, not 2.
+  const clip = makeAudioClip("voice", "voice.mp3", null, 0, 5);
+  const out = splitAudioClips([clip], 2, respeedTo(2));
+  assert.equal(out.length, 2);
+  assert.equal(out[1].start, 2);
+  assert.equal(out[1].duration, 3);
+  assert.equal(out[1].sourceIn, 4);
+});
+
+test("splitting an audio clip adds to a source offset it already had", () => {
+  const clip = makeAudioClip("voice", "voice.mp3", null, 2, 5, 1, 3);
+  const out = splitAudioClips([clip], 4);
+  assert.equal(out[1].start, 4);
+  assert.equal(out[1].duration, 3);
+  assert.equal(out[1].sourceIn, 5);
+});
+
+test("a cut in the middle of an audio clip splits it and resumes past the cut", () => {
+  // This was the old bug: one clip played straight through the
+  // removed bit. Now the part after the cut is its own clip,
+  // starting 10 seconds into its file.
+  const clip = makeAudioClip("voice", "voice.mp3", null, 0, 20);
+  const out = shiftAudioClips([clip], [{ start: 5, end: 10 }]);
+  assert.equal(out.length, 2);
+  assert.deepEqual(
+    out.map((c) => [c.id, c.start, c.duration, c.sourceIn]),
+    [
+      ["voice", 0, 5, 0],
+      ["voice-b-b", 5, 10, 10],
+    ],
+  );
 });
 
 test("a cutdown trims and drops audio clips at the target", () => {

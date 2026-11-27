@@ -546,11 +546,48 @@ export function toggleAudioClipMuted(clips, id) {
   });
 }
 
+// Split audio clips at a point on the timeline, the same way a
+// video split cuts a clip in two. A clip straddling the split point
+// becomes two clips: the first keeps its start and source offset,
+// the second starts at the split point and resumes from the file
+// position the first half reached, worked out at the video speed
+// under it, so the words carry on where they left off instead of
+// starting over. Clips fully before or after the point are
+// untouched, and volume, mute flag and name survive on both halves.
+// Splitting changes nothing about how the track sounds, it just
+// lets the two halves move on their own afterwards. With nothing
+// straddling the point the track comes back as it was.
+export function splitAudioClips(clips, at, videoClips) {
+  if (!clips.length) return clips;
+  let changed = false;
+  const out = [];
+  for (const clip of clips) {
+    const end = clip.start + clip.duration;
+    if (at <= clip.start || at >= end) {
+      out.push(clip);
+      continue;
+    }
+    changed = true;
+    const first = { ...clip, duration: at - clip.start };
+    const second = {
+      ...clip,
+      id: `${clip.id}-b`,
+      start: at,
+      duration: end - at,
+      sourceIn: audioFileOffset(clip, videoClips, at),
+    };
+    out.push(first, second);
+  }
+  return changed ? out : clips;
+}
+
 // Move audio clips to match a timeline with ranges cut out of it.
 // A clip that sat fully inside a cut range goes away, one that
-// straddled a cut gets shorter, the rest shift earlier by the cut
-// time. A clip whose start sat inside a cut range loses its left
-// end, and the file seconds that left end used up move into the
+// straddled a cut is split in two, so the part after the cut
+// resumes from the right spot in its file instead of playing
+// straight through the removed bit, and the rest shift earlier by
+// the cut time. A clip whose start sat inside a cut range loses its
+// left end, and the file seconds that left end used up move into the
 // source offset, so the clip resumes partway through its file
 // instead of starting over. The offset is worked out at the video
 // speed under the cut part, the same way the preview seeks, so a
@@ -569,18 +606,29 @@ export function shiftAudioClips(clips, ranges, videoClips) {
   };
   const out = [];
   for (const clip of clips) {
-    const start = clip.start - cutBefore(clip.start);
-    const end = clip.start + clip.duration - cutBefore(clip.start + clip.duration);
-    if (end <= start) continue;
-    let sourceIn = audioClipSourceIn(clip);
-    const containing = sorted.find((r) => clip.start >= r.start && clip.start < r.end);
-    if (containing) {
-      // The clip resumes where the cut ends, so its new source
-      // offset is the file position at that point, which already
-      // counts from the old offset.
-      sourceIn = audioFileOffset(clip, videoClips, containing.end);
+    // Split the clip at every cut boundary inside it first, so a
+    // clip straddling a cut becomes two clips and the part after the
+    // cut resumes from the right spot in its file, instead of one
+    // clip playing straight through the removed bit.
+    let pieces = [clip];
+    for (const r of sorted) {
+      pieces = splitAudioClips(pieces, r.start, videoClips);
+      pieces = splitAudioClips(pieces, r.end, videoClips);
     }
-    out.push({ ...clip, start, duration: end - start, sourceIn });
+    for (const piece of pieces) {
+      const start = piece.start - cutBefore(piece.start);
+      const end = piece.start + piece.duration - cutBefore(piece.start + piece.duration);
+      if (end <= start) continue;
+      let sourceIn = audioClipSourceIn(piece);
+      const containing = sorted.find((r) => piece.start >= r.start && piece.start < r.end);
+      if (containing) {
+        // The clip resumes where the cut ends, so its new source
+        // offset is the file position at that point, which already
+        // counts from the old offset.
+        sourceIn = audioFileOffset(piece, videoClips, containing.end);
+      }
+      out.push({ ...piece, start, duration: end - start, sourceIn });
+    }
   }
   return out;
 }
