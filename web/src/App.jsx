@@ -341,6 +341,17 @@ export default function App() {
 
   function updateClip(id, patch) {
     recordSliderHistory();
+    if (patch.speed !== undefined) {
+      // A clip's own speed moves the audio track with it, the same
+      // way the whole-edit speed change does, so a voiceover stays
+      // lined up with the video after one clip speeds up or slows
+      // down. Every other patch leaves the track where it is.
+      const oldClips = clipsRef.current;
+      const next = oldClips.map((c) => (c.id === id ? { ...c, ...patch } : c));
+      setClips(next);
+      setAudioClips((prev) => respeedAudioClips(prev, oldClips, next));
+      return;
+    }
     setClips((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
   }
 

@@ -666,3 +666,57 @@ test("respeeding with no video clips leaves the track alone", () => {
   const clips = twoAudioClips();
   assert.deepEqual(respeedAudioClips(clips, [], respeedTo(2)), clips);
 });
+
+// Speeding up or slowing down one clip only: the clips before it
+// do not move, the ones after it shift by the time gained or lost.
+
+function respeedOne(id, factor) {
+  return twoClips().map((c) => (c.id === id ? { ...c, speed: factor } : c));
+}
+
+test("speeding up the first clip only moves later audio earlier", () => {
+  const clips = [
+    makeAudioClip("later", "later.mp3", null, 12, 2),
+    { ...makeAudioClip("straddler", "mid.mp3", null, 8, 6), volume: 0.5, muted: true },
+  ];
+  const out = respeedAudioClips(clips, twoClips(), respeedOne("a", 2));
+  assert.equal(out.length, 2);
+  assert.deepEqual(
+    out.map((c) => [c.id, c.start, c.duration]),
+    [
+      ["later", 7, 2],
+      ["straddler", 4, 5],
+    ],
+  );
+  const straddler = out.find((c) => c.id === "straddler");
+  assert.equal(straddler.name, "mid.mp3");
+  assert.equal(straddler.volume, 0.5);
+  assert.equal(straddler.muted, true);
+});
+
+test("slowing down one clip only pushes later audio later", () => {
+  const out = respeedAudioClips(
+    [makeAudioClip("later", "later.mp3", null, 12, 2)],
+    twoClips(),
+    respeedOne("b", 0.5),
+  );
+  assert.equal(out.length, 1);
+  assert.equal(out[0].start, 14);
+  assert.equal(out[0].duration, 4);
+});
+
+test("audio before the changed clip does not move", () => {
+  const clips = [
+    makeAudioClip("before", "before.mp3", null, 2, 3),
+    makeAudioClip("after", "after.mp3", null, 12, 2),
+  ];
+  const out = respeedAudioClips(clips, twoClips(), respeedOne("b", 2));
+  assert.equal(out.length, 2);
+  assert.deepEqual(
+    out.map((c) => [c.id, c.start, c.duration]),
+    [
+      ["before", 2, 3],
+      ["after", 11, 1],
+    ],
+  );
+});
