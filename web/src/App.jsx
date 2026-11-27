@@ -26,6 +26,7 @@ import {
   pushHistory,
   redoHistory,
   removeAudioClip,
+  respeedAudioClips,
   setAudioClipVolume,
   setClipEffects,
   setClipMuted,
@@ -760,8 +761,15 @@ export default function App() {
       case "speed-all": {
         if (!clips.length) return setAgentSay("Import a video first.");
         recordHistory();
-        setClips(clips.map((c) => ({ ...c, speed: parsed.factor })));
-        setAgentSay(`Sped the whole thing up to ${parsed.factor}x. It now runs ${totalDuration(clips.map((c) => ({ ...c, speed: parsed.factor })) ).toFixed(1)} seconds.`);
+        const next = clips.map((c) => ({ ...c, speed: parsed.factor }));
+        setClips(next);
+        // The audio track moves with the speed change, through the
+        // same time mapping as the video, so a voiceover stays
+        // lined up with the video.
+        setAudioClips((prev) => respeedAudioClips(prev, clips, next));
+        const audioNote = audioClipsRef.current.length ? " The audio track moved with it." : "";
+        const verb = parsed.factor >= 1 ? "Sped the whole thing up" : "Slowed the whole thing down";
+        setAgentSay(`${verb} to ${parsed.factor}x. It now runs ${totalDuration(next).toFixed(1)} seconds.${audioNote}`);
         return;
       }
       case "split-at": {

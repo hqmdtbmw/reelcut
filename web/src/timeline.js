@@ -564,3 +564,40 @@ export function cutdownAudioClips(clips, target) {
   }
   return out;
 }
+
+// Move the audio track through a speed change. Speeding the whole
+// edit up or slowing it down stretches or squeezes every video
+// clip, so a point on the old timeline lands somewhere else on the
+// new one. Each audio clip is remapped through that same move: its
+// start and its end are mapped, and the duration is what is left
+// between them. An audio clip that ends up past the new end of the
+// edit goes away, one that straddles the end is trimmed to it. With
+// no audio clips there is nothing to move, and with no video clips
+// there is nothing to map against, so the track is left alone.
+export function respeedAudioClips(audioClips, oldClips, newClips) {
+  if (!audioClips.length) return [];
+  const oldPacked = packClips(oldClips);
+  const newPacked = packClips(newClips);
+  if (!oldPacked.length || !newPacked.length) return audioClips;
+  const oldTotal = totalDuration(oldClips);
+  const newTotal = totalDuration(newClips);
+  const mapTime = (t) => {
+    if (t <= 0) return 0;
+    if (t >= oldTotal) return newTotal;
+    const idx = oldPacked.findIndex((c) => t >= c.start && t < c.start + clipDuration(c));
+    if (idx === -1) return newTotal;
+    const oldClip = oldPacked[idx];
+    const newClip = newPacked[idx];
+    const oldLen = clipDuration(oldClip);
+    const ratio = oldLen > 0 ? clipDuration(newClip) / oldLen : 0;
+    return newClip.start + (t - oldClip.start) * ratio;
+  };
+  const out = [];
+  for (const clip of audioClips) {
+    const start = mapTime(clip.start);
+    const end = mapTime(clip.start + clip.duration);
+    if (start >= newTotal || end <= start) continue;
+    out.push({ ...clip, start, duration: end - start });
+  }
+  return out;
+}

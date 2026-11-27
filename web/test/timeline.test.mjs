@@ -33,6 +33,7 @@ import {
   pushHistory,
   redoHistory,
   removeAudioClip,
+  respeedAudioClips,
   setAudioClipMuted,
   setAudioClipVolume,
   setClipEffects,
@@ -593,4 +594,75 @@ test("a snapshot covers the audio track too", () => {
   assert.equal(state.audioClips[0].name, "voice.mp3");
   const undone = undoHistory(pushHistory(makeHistory(), state), editState([], [], [], null));
   assert.equal(undone.state.audioClips.length, 2);
+});
+
+// Respeeding the audio track: the video clips run 10 seconds then
+// 6 seconds at 1x, so the edit is 16 seconds long.
+
+function respeedTo(factor) {
+  return twoClips().map((c) => ({ ...c, speed: factor }));
+}
+
+test("respeeding the audio track follows a whole-edit speed up", () => {
+  const clips = [
+    makeAudioClip("early", "early.mp3", null, 2, 5),
+    makeAudioClip("straddler", "mid.mp3", null, 8, 6),
+  ];
+  const out = respeedAudioClips(clips, twoClips(), respeedTo(2));
+  assert.equal(out.length, 2);
+  assert.deepEqual(
+    out.map((c) => [c.id, c.start, c.duration]),
+    [
+      ["early", 1, 2.5],
+      ["straddler", 4, 3],
+    ],
+  );
+});
+
+test("respeeding the audio track follows a whole-edit slow down", () => {
+  const clip = { ...makeAudioClip("voice", "voice.mp3", null, 2, 5), volume: 0.5, muted: true };
+  const out = respeedAudioClips([clip], twoClips(), respeedTo(0.5));
+  assert.equal(out.length, 1);
+  assert.equal(out[0].start, 4);
+  assert.equal(out[0].duration, 10);
+  assert.equal(out[0].name, "voice.mp3");
+  assert.equal(out[0].volume, 0.5);
+  assert.equal(out[0].muted, true);
+});
+
+test("respeeding an empty audio track stays empty", () => {
+  assert.deepEqual(respeedAudioClips([], twoClips(), respeedTo(2)), []);
+  assert.deepEqual(respeedAudioClips([], twoClips(), respeedTo(0.5)), []);
+});
+
+test("respeeding drops audio clips past the new end and trims straddlers", () => {
+  const clips = [
+    makeAudioClip("inside", "in.mp3", null, 2, 2),
+    makeAudioClip("straddler", "mid.mp3", null, 14, 4),
+    makeAudioClip("past", "past.mp3", null, 17, 2),
+  ];
+  const out = respeedAudioClips(clips, twoClips(), respeedTo(2));
+  assert.equal(out.length, 2);
+  assert.deepEqual(
+    out.map((c) => [c.id, c.start, c.duration]),
+    [
+      ["inside", 1, 1],
+      ["straddler", 7, 1],
+    ],
+  );
+});
+
+test("respeeding maps through clips that had different speeds", () => {
+  const before = [makeClip("a", "a.mp4", null, 10), makeClip("b", "b.mp4", null, 10)];
+  before[1].speed = 2;
+  const after = before.map((c) => ({ ...c, speed: 2 }));
+  const out = respeedAudioClips([makeAudioClip("voice", "voice.mp3", null, 8, 5)], before, after);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].start, 4);
+  assert.equal(out[0].duration, 4);
+});
+
+test("respeeding with no video clips leaves the track alone", () => {
+  const clips = twoAudioClips();
+  assert.deepEqual(respeedAudioClips(clips, [], respeedTo(2)), clips);
 });
