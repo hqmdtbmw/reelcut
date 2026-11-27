@@ -386,6 +386,10 @@ header.top p {
   user-select: none;
 }
 
+.pip-block.selected {
+  outline: 2px solid var(--ink);
+}
+
 .pip-block .clip-name {
   font-weight: 600;
   font-size: 13px;

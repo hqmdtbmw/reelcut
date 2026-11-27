@@ -38,7 +38,7 @@ import { audioClipLoops, audioClipSourceIn, audioRateSegments, clampMusicVolume,
 // runs out before the overlay ends, and stopping at the end of
 // its slot. Its volume and mute follow the same rules as the
 // clip audio, so a muted overlay exports silence.
-export async function buildExportAudio({ createAudioContext, video, music, firstClip, audioClips = [], clips = [], pip = null }) {
+export async function buildExportAudio({ createAudioContext, video, music, firstClip, audioClips = [], clips = [], pip = null, pips = [] }) {
   const context = createAudioContext();
   if (context.resume) {
     try {
@@ -111,22 +111,20 @@ export async function buildExportAudio({ createAudioContext, video, music, first
       // That clip would not decode. Leave it out and keep the rest.
     }
   }
-  // The picture in picture overlay has a voice of its own. Its
-  // file plays from the start at its place on the timeline, at
-  // the speed of the video clip underneath, looping when its file
-  // runs out before the overlay ends, and stopping at the end of
-  // its slot, the same as an audio clip does. A file that would
-  // not decode is left out, losing the overlay sound is better
-  // than losing everything.
-  let pipSource = null;
-  if (pip && pip.file && pip.duration > 0) {
+  // The picture in picture overlays each have a voice of their
+  // own. A single `pip` still works too, for callers that only
+  // have one overlay.
+  const pipSources = [];
+  const overlayList = pips.length ? pips : pip ? [pip] : [];
+  for (const overlay of overlayList) {
+    if (!overlay || !overlay.file || overlay.duration <= 0) continue;
     try {
-      const buf = await pip.file.arrayBuffer();
+      const buf = await overlay.file.arrayBuffer();
       const decoded = await context.decodeAudioData(buf);
-      pipSource = context.createBufferSource();
+      const pipSource = context.createBufferSource();
       pipSource.buffer = decoded;
-      pipSource.loop = audioClipLoops(pip, clips, decoded.duration) > 1;
-      const segments = audioRateSegments(pip, clips);
+      pipSource.loop = audioClipLoops(overlay, clips, decoded.duration) > 1;
+      const segments = audioRateSegments(overlay, clips);
       if (pipSource.playbackRate) {
         pipSource.playbackRate.value = segments[0] ? segments[0].rate : 1;
         if (typeof pipSource.playbackRate.setValueAtTime === "function") {
@@ -136,19 +134,22 @@ export async function buildExportAudio({ createAudioContext, video, music, first
         }
       }
       const gain = context.createGain();
-      gain.gain.value = effectiveVolume(pip);
+      gain.gain.value = effectiveVolume(overlay);
       pipSource.connect(gain);
       gain.connect(dest);
-      pipSource.start(context.currentTime + pip.start, 0);
+      pipSource.start(context.currentTime + overlay.start, 0);
       if (typeof pipSource.stop === "function") {
-        pipSource.stop(context.currentTime + pip.start + pip.duration);
+        pipSource.stop(context.currentTime + overlay.start + overlay.duration);
       }
+      pipSources.push(pipSource);
     } catch {
-      pipSource = null;
+      // That overlay file would not decode. Leave it out and keep
+      // the rest, losing one overlay sound is better than losing
+      // everything.
     }
   }
   const track = dest.stream.getAudioTracks()[0] || null;
-  return { context, clipGain, musicSource, audioSources, pipSource, track };
+  return { context, clipGain, musicSource, audioSources, pipSource: pipSources[0] || null, pipSources, track };
 }
 
 // Set the clip gain for the clip now playing in the export, so each
@@ -172,6 +173,13 @@ export function stopExportAudio(mix) {
     mix.pipSource?.stop();
   } catch {
     // Already stopped, nothing to do.
+  }
+  for (const source of mix.pipSources || []) {
+    try {
+      source.stop();
+    } catch {
+      // Already stopped, nothing to do.
+    }
   }
   for (const source of mix.audioSources || []) {
     try {

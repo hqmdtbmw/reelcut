@@ -59,6 +59,7 @@ import {
   trimClip,
   undoHistory,
 } from "../src/timeline.js";
+import { makePipClip } from "../src/pip.js";
 
 function twoClips() {
   return [
@@ -827,6 +828,38 @@ test("a snapshot covers the audio track too", () => {
   assert.equal(state.audioClips[0].name, "voice.mp3");
   const undone = undoHistory(pushHistory(makeHistory(), state), editState([], [], [], null));
   assert.equal(undone.state.audioClips.length, 2);
+});
+
+test("a snapshot covers the picture in picture list", () => {
+  const first = makePipClip("pip-1", "facecam.mp4", null, 2, 4, "bottom-right", "medium", 10);
+  const second = makePipClip("pip-2", "other.mp4", null, 8, 3, "top-left", "small", 10);
+  const state = snapshotState({
+    clips: twoClips(),
+    overlays: [],
+    captions: [],
+    audioClips: [],
+    music: null,
+    pips: [first, second],
+  });
+  assert.equal(state.pips.length, 2);
+  assert.equal(state.pips[1].position, "top-left");
+  const undone = undoHistory(pushHistory(makeHistory(), state), editState([], [], [], null));
+  assert.equal(undone.state.pips.length, 2);
+  assert.equal(undone.state.pips[0].id, "pip-1");
+});
+
+test("a snapshot migrates a saved single overlay into a list", () => {
+  const single = makePipClip("pip-1", "facecam.mp4", null, 2, 4, "bottom-right", "medium", 10);
+  const state = snapshotState({
+    clips: twoClips(),
+    overlays: [],
+    captions: [],
+    audioClips: [],
+    music: null,
+    pip: single,
+  });
+  assert.equal(state.pips.length, 1);
+  assert.equal(state.pips[0].id, "pip-1");
 });
 
 // Respeeding the audio track: the video clips run 10 seconds then

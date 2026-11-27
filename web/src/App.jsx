@@ -49,13 +49,18 @@ import { buildExportAudio, setExportClipVolume, stopExportAudio } from "./export
 import {
   PIP_POSITIONS,
   PIP_SIZES,
+  addPipClip,
   clampPipClip,
+  cutdownPips,
   makePipClip,
   pipFileOffset,
   pipRect,
-  pipVisibleAtTime,
-  setPipMuted,
-  setPipVolume,
+  pipsFromState,
+  removePipClip,
+  setPipClipVolume,
+  togglePipClipMuted,
+  updatePipClip,
+  visiblePipsAtTime,
 } from "./pip.js";
 
 let nextId = 1;
@@ -86,10 +91,11 @@ export default function App() {
   const [music, setMusic] = useState(null);
   const [audioClips, setAudioClips] = useState([]);
   const [selectedAudioId, setSelectedAudioId] = useState(null);
-  const [pip, setPip] = useState(null);
+  const [pips, setPips] = useState([]);
+  const [selectedPipId, setSelectedPipId] = useState(null);
 
   const videoRef = useRef(null);
-  const pipVideoRef = useRef(null);
+  const pipVideoElsRef = useRef(new Map());
   const pipInputRef = useRef(null);
   const trackRef = useRef(null);
   const wasmRef = useRef(null);
@@ -101,8 +107,8 @@ export default function App() {
   const audioElsRef = useRef(new Map());
   const audioClipsRef = useRef(audioClips);
   audioClipsRef.current = audioClips;
-  const pipRef = useRef(pip);
-  pipRef.current = pip;
+  const pipsRef = useRef(pips);
+  pipsRef.current = pips;
   const [wasmReady, setWasmReady] = useState(false);
   const playheadRef = useRef(0);
   playheadRef.current = playhead;
@@ -125,16 +131,19 @@ export default function App() {
   const currentClip = clipAtTime(packed, playhead);
   const activeOverlays = overlays.filter((o) => playhead >= o.start && playhead < o.end);
   const activeCaption = captions.find((c) => playhead >= c.start && playhead < c.end);
-  const pipVisible = pipVisibleAtTime(pip, playhead);
-  const pipStyle = useMemo(() => {
-    if (!pip) return null;
-    const rect = pipRect(pip, 1920, 1080);
+  // The overlays on screen right now, and the one the panel is
+  // editing. With only one overlay it is the selected one, so the
+  // panel and the agent commands just work without clicking it.
+  const visiblePips = visiblePipsAtTime(pips, playhead);
+  const selectedPip = pips.find((c) => c.id === selectedPipId) || (pips.length === 1 ? pips[0] : null);
+  function pipStyleFor(clip) {
+    const rect = pipRect(clip, 1920, 1080);
     return {
       left: `${(rect.x / 1920) * 100}%`,
       top: `${(rect.y / 1080) * 100}%`,
       width: `${(rect.width / 1920) * 100}%`,
     };
-  }, [pip]);
+  }
 
   // Load the Rust core compiled to WebAssembly. If it fails to load,
   // the app keeps working on the JavaScript mirror in timeline.js.
@@ -280,35 +289,39 @@ export default function App() {
     video.volume = effectiveVolume(currentClip);
   }, [playhead, currentClip]);
 
-  // Keep the picture in picture video in step with the playhead.
-  // It plays at the speed of the video clip underneath, and loops
-  // when its file runs out before the overlay ends. Its sound
-  // plays too, at the overlay volume, so muting it in the panel
-  // quiets the preview. While paused it seeks to the right spot,
-  // so pressing play picks it up from there. The element only
-  // exists while the overlay is on screen, so a hidden overlay
-  // needs no work here.
+  // Keep every picture in picture video in step with the
+  // playhead. Each one plays at the speed of the video clip
+  // underneath, and loops when its file runs out before the
+  // overlay ends. Their sound plays too, at each overlay volume,
+  // so muting one in the panel quiets the preview. While paused
+  // they seek to the right spot, so pressing play picks them up
+  // from there. An overlay off screen is paused and left alone.
   useEffect(() => {
-    const el = pipVideoRef.current;
-    if (!el || !pip) return;
-    if (el.dataset.track !== pip.url) {
-      el.dataset.track = pip.url;
-      el.src = pip.url;
+    for (const pip of pips) {
+      const el = pipVideoElsRef.current.get(pip.id);
+      if (!el) continue;
+      if (el.dataset.track !== pip.url) {
+        el.dataset.track = pip.url;
+        el.src = pip.url;
+      }
+      el.volume = effectiveVolume(pip);
+      const rate = currentClip ? currentClip.speed : 1;
+      if (el.playbackRate !== rate) el.playbackRate = rate;
+      const fileDuration = Number.isFinite(el.duration) && el.duration > 0 ? el.duration : undefined;
+      const offset = pipFileOffset(pip, playhead, fileDuration);
+      const seekTo = fileDuration ? Math.min(offset, Math.max(0, fileDuration - 0.05)) : offset;
+      const visible = playhead >= pip.start && playhead < pip.start + pip.duration;
+      if (playing && visible) {
+        if (Math.abs(el.currentTime - seekTo) > 0.3) el.currentTime = seekTo;
+        if (el.paused) el.play().catch(() => {});
+      } else {
+        el.pause();
+        if (!playing && visible && Math.abs(el.currentTime - seekTo) > 0.3) {
+          el.currentTime = seekTo;
+        }
+      }
     }
-    el.volume = effectiveVolume(pip);
-    const rate = currentClip ? currentClip.speed : 1;
-    if (el.playbackRate !== rate) el.playbackRate = rate;
-    const fileDuration = Number.isFinite(el.duration) && el.duration > 0 ? el.duration : undefined;
-    const offset = pipFileOffset(pip, playhead, fileDuration);
-    const seekTo = fileDuration ? Math.min(offset, Math.max(0, fileDuration - 0.05)) : offset;
-    if (playing) {
-      if (Math.abs(el.currentTime - seekTo) > 0.3) el.currentTime = seekTo;
-      if (el.paused) el.play().catch(() => {});
-    } else {
-      el.pause();
-      if (Math.abs(el.currentTime - seekTo) > 0.3) el.currentTime = seekTo;
-    }
-  }, [playing, playhead, pip, currentClip]);
+  }, [playing, playhead, pips, currentClip]);
 
   // Drive playback: advance the playhead, hop to the next clip, apply fades.
   useEffect(() => {
@@ -364,7 +377,7 @@ export default function App() {
       captions: captionsRef.current,
       audioClips: audioClipsRef.current,
       music: musicRef.current,
-      pip: pipRef.current,
+      pips: pipsRef.current,
     });
   }
 
@@ -392,9 +405,10 @@ export default function App() {
     setCaptions(state.captions);
     setAudioClips(state.audioClips || []);
     setMusic(state.music);
-    setPip(state.pip || null);
+    setPips(pipsFromState(state));
     setSelectedId((prev) => (state.clips.some((c) => c.id === prev) ? prev : null));
     setSelectedAudioId((prev) => ((state.audioClips || []).some((c) => c.id === prev) ? prev : null));
+    setSelectedPipId((prev) => (pipsFromState(state).some((c) => c.id === prev) ? prev : null));
     setPlayhead((prev) => Math.min(prev, totalDuration(state.clips)));
     setPlaying(false);
   }
@@ -577,8 +591,8 @@ export default function App() {
   // Add a video file as picture in picture. It lands at the
   // playhead, in the bottom right corner at medium size, and plays
   // for as long as its file lasts or until the edit ends, whichever
-  // comes first. Adding another one replaces the first, since the
-  // editor holds one overlay clip.
+  // comes first. Adding another one keeps the ones already there,
+  // each overlay has its own place on the timeline.
   async function importPip(files) {
     const file = Array.from(files).find((f) => f.type.startsWith("video/"));
     if (!file) {
@@ -612,20 +626,26 @@ export default function App() {
       return;
     }
     recordHistory();
-    setPip(clip);
+    setPips((prev) => addPipClip(prev, clip));
+    setSelectedPipId(clip.id);
     setAgentSay(
       `Added ${file.name} as picture in picture at ${formatTime(clip.start)}, bottom right, medium size. Change the corner or size in the picture in picture panel.`,
     );
   }
 
   function removePip() {
-    if (!pip) {
-      setAgentSay("There is no picture in picture yet. Add one first and then I can take it out.");
+    if (!selectedPip) {
+      if (!pips.length) {
+        setAgentSay("There is no picture in picture yet. Add one first and then I can take it out.");
+      } else {
+        setAgentSay("You have more than one picture in picture. Click the one you want to remove first.");
+      }
       return;
     }
     recordHistory();
-    setPip(null);
-    setAgentSay("Removed the picture in picture.");
+    setPips((prev) => removePipClip(prev, selectedPip.id));
+    if (selectedPipId === selectedPip.id) setSelectedPipId(null);
+    setAgentSay(`Removed ${selectedPip.name} from the picture in picture track.`);
   }
 
   function splitAtPlayhead() {
@@ -888,6 +908,7 @@ export default function App() {
         recordHistory();
         setClips(cutdown(clips, parsed.seconds));
         setAudioClips((prev) => cutdownAudioClips(prev, parsed.seconds));
+        setPips((prev) => cutdownPips(prev, parsed.seconds));
         setOverlays((prev) =>
           prev
             .filter((o) => o.start < parsed.seconds)
@@ -1100,13 +1121,21 @@ export default function App() {
         removePip();
         return;
       case "move-pip": {
-        if (!pip) {
-          setAgentSay("There is no picture in picture yet. Add one first and then I can move it.");
+        if (!selectedPip) {
+          setAgentSay(
+            pips.length
+              ? "You have more than one picture in picture. Click the one you want to move first."
+              : "There is no picture in picture yet. Add one first and then I can move it.",
+          );
           return;
         }
         recordHistory();
-        setPip({ ...pip, position: parsed.position });
-        setAgentSay(`Moved the picture in picture to the ${parsed.position.replace("-", " ")}.`);
+        setPips((prev) => updatePipClip(prev, selectedPip.id, { position: parsed.position }));
+        setAgentSay(
+          pips.length > 1
+            ? `Moved ${selectedPip.name} to the ${parsed.position.replace("-", " ")}.`
+            : `Moved the picture in picture to the ${parsed.position.replace("-", " ")}.`,
+        );
         return;
       }
       default:
@@ -1131,19 +1160,20 @@ export default function App() {
     const video = document.createElement("video");
     video.muted = false;
     video.crossOrigin = "anonymous";
-    // The picture in picture overlay, drawn on top of each frame
-    // while it is on screen. Its picture plays at the speed of
+    // The picture in picture overlays, drawn on top of each frame
+    // while they are on screen. Each one plays at the speed of
     // the clip underneath, the same as in the preview, and loops
-    // when its file runs out before the overlay ends. This element
-    // stays muted: its sound comes through the export audio mix,
-    // not through this element.
-    const pipVideo = document.createElement("video");
-    pipVideo.muted = true;
-    pipVideo.loop = true;
-    pipVideo.crossOrigin = "anonymous";
-    if (pip) {
-      pipVideo.src = pip.url;
-    }
+    // when its file runs out before the overlay ends. These
+    // elements stay muted: their sound comes through the export
+    // audio mix, not through them.
+    const pipVideos = pips.map((pip) => {
+      const el = document.createElement("video");
+      el.muted = true;
+      el.loop = true;
+      el.crossOrigin = "anonymous";
+      el.src = pip.url;
+      return el;
+    });
     // Build the export audio mix: the clip sound runs through a gain
     // that follows each clip's volume and mute, the audio track mixes
     // in beside it, the picture in picture sound mixes in beside
@@ -1158,7 +1188,7 @@ export default function App() {
         firstClip: packed[0],
         audioClips,
         clips: packed,
-        pip,
+        pips,
       });
     } catch {
       mix = null;
@@ -1204,12 +1234,10 @@ export default function App() {
         el.addEventListener(event, resolve, { once: true });
         setTimeout(resolve, 5000);
       });
-    // Know the overlay file length before the frames start, so the
-    // offset math can wrap when the overlay loops. Waiting here
-    // costs nothing, the recording has not started yet.
-    if (pip) {
-      await waitFor(pipVideo, "loadedmetadata");
-    }
+    // Know each overlay file length before the frames start, so
+    // the offset math can wrap when an overlay loops. Waiting
+    // here costs nothing, the recording has not started yet.
+    await Promise.all(pipVideos.map((el) => waitFor(el, "loadedmetadata")));
     try {
       let elapsed = 0;
       for (const clip of packed) {
@@ -1223,20 +1251,27 @@ export default function App() {
         await video.play().catch(() => {});
         const clipLen = clipDuration(clip);
         const clipStart = clip.start;
-        // Line the overlay up with this clip before the frames
+        // Line each overlay up with this clip before the frames
         // start, so the first frame it appears in is already the
-        // right one. It plays from the offset the clip starts at,
-        // at the clip speed, so it stays in step with the main
-        // video through the clip.
-        if (pip && pip.start < clipStart + clipLen && pip.start + pip.duration > clipStart) {
-          const fileDuration =
-            Number.isFinite(pipVideo.duration) && pipVideo.duration > 0 ? pipVideo.duration : undefined;
-          const offset = pipFileOffset(pip, Math.max(clipStart, pip.start), fileDuration);
-          pipVideo.currentTime = fileDuration ? Math.min(offset, Math.max(0, fileDuration - 0.05)) : offset;
-          pipVideo.playbackRate = clip.speed;
-          pipVideo.play().catch(() => {});
-        } else {
-          pipVideo.pause();
+        // right one. Each one plays from the offset the clip
+        // starts at, at the clip speed, so it stays in step with
+        // the main video through the clip. Waiting for the seek
+        // to land first means the export never shows the frame
+        // from before the seek.
+        for (let i = 0; i < pips.length; i += 1) {
+          const pip = pips[i];
+          const pipVideo = pipVideos[i];
+          if (pip.start < clipStart + clipLen && pip.start + pip.duration > clipStart) {
+            const fileDuration =
+              Number.isFinite(pipVideo.duration) && pipVideo.duration > 0 ? pipVideo.duration : undefined;
+            const offset = pipFileOffset(pip, Math.max(clipStart, pip.start), fileDuration);
+            pipVideo.currentTime = fileDuration ? Math.min(offset, Math.max(0, fileDuration - 0.05)) : offset;
+            await waitFor(pipVideo, "seeked");
+            pipVideo.playbackRate = clip.speed;
+            pipVideo.play().catch(() => {});
+          } else {
+            pipVideo.pause();
+          }
         }
         while (video.currentTime < clip.sourceOut - 0.05) {
           const t = clipStart + (video.currentTime - clip.sourceIn) / clip.speed;
@@ -1277,11 +1312,13 @@ export default function App() {
             ctx.fillStyle = "#fff";
             ctx.fillText(cap.text, width / 2, height * 0.88 + 36);
           }
-          // Draw the picture in picture frame on top, when the
-          // overlay is on screen at this point in the edit. If it
-          // drifted from where it should be, seek it back, the
-          // same way the preview does.
-          if (pip) {
+          // Draw each picture in picture frame on top, when the
+          // overlay is on screen at this point in the edit. If
+          // one drifted from where it should be, seek it back,
+          // the same way the preview does.
+          for (let i = 0; i < pips.length; i += 1) {
+            const pip = pips[i];
+            const pipVideo = pipVideos[i];
             if (t >= pip.start && t < pip.start + pip.duration) {
               const fileDuration =
                 Number.isFinite(pipVideo.duration) && pipVideo.duration > 0 ? pipVideo.duration : undefined;
@@ -1307,7 +1344,7 @@ export default function App() {
     } finally {
       recorder.stop();
       video.pause();
-      pipVideo.pause();
+      for (const pipVideo of pipVideos) pipVideo.pause();
       stopExportAudio(mix);
     }
     await done;
@@ -1384,16 +1421,20 @@ export default function App() {
                   </div>
                 ))}
                 {activeCaption && <div className="caption-line">{activeCaption.text}</div>}
-                {pipVisible && pipStyle && (
+                {visiblePips.map((pip) => (
                   <video
-                    ref={pipVideoRef}
+                    key={pip.id}
+                    ref={(el) => {
+                      if (el) pipVideoElsRef.current.set(pip.id, el);
+                      else pipVideoElsRef.current.delete(pip.id);
+                    }}
                     className="pip-video"
                     loop
                     playsInline
                     preload="auto"
-                    style={pipStyle}
+                    style={pipStyleFor(pip)}
                   />
-                )}
+                ))}
               </>
             ) : (
               <div className="preview-empty">
@@ -1506,15 +1547,19 @@ export default function App() {
             </div>
             <p className="track-label">Picture in picture</p>
             <div className="pip-track">
-              {!pip && <p className="track-empty">Add a second video and it will show up here.</p>}
-              {pip && (
+              {pips.length === 0 && <p className="track-empty">Add a second video and it will show up here.</p>}
+              {pips.map((pip) => (
                 <div
-                  className="pip-block"
+                  key={pip.id}
+                  className={`pip-block ${selectedPipId === pip.id ? "selected" : ""}`}
                   style={{
                     left: total > 0 ? `calc(6px + (100% - 12px) * ${pip.start / total})` : "6px",
                     width: total > 0 ? `calc((100% - 12px) * ${pip.duration / total})` : "0px",
                   }}
-                  onClick={() => seek(pip.start)}
+                  onClick={() => {
+                    setSelectedPipId(pip.id);
+                    seek(pip.start);
+                  }}
                 >
                   <div className="clip-name">{pip.name}</div>
                   <div className="clip-meta">
@@ -1522,7 +1567,7 @@ export default function App() {
                     {pip.muted ? " · muted" : ""}
                   </div>
                 </div>
-              )}
+              ))}
               {total > 0 && (
                 <div className="playhead" style={{ left: `calc(6px + (100% - 12px) * ${playhead / total})` }} />
               )}
@@ -1832,84 +1877,111 @@ export default function App() {
                 e.target.value = "";
               }}
             />
-            {pip ? (
+            {pips.length ? (
               <>
-                <p>
-                  <strong>{pip.name}</strong>
-                </p>
                 <p className="hint">
-                  {formatTime(pip.start)} to {formatTime(pip.start + pip.duration)} on the timeline. Click the clip on
-                  the picture in picture track to jump to it.
+                  {pips.length === 1
+                    ? "One overlay on the timeline. Add another and they stack, each in its own corner."
+                    : `${pips.length} overlays on the timeline. Click one below to change it.`}
                 </p>
-                <label>
-                  Corner
-                  <select
-                    value={pip.position}
-                    onChange={(e) => {
-                      recordHistory();
-                      setPip({ ...pip, position: e.target.value });
-                    }}
-                  >
-                    {PIP_POSITIONS.map((p) => (
-                      <option key={p} value={p}>
-                        {p.replace("-", " ")}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Size
-                  <select
-                    value={pip.size}
-                    onChange={(e) => {
-                      recordHistory();
-                      setPip({ ...pip, size: e.target.value });
-                    }}
-                  >
-                    {Object.keys(PIP_SIZES).map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Volume: {pip.muted ? "muted" : `${Math.round(pip.volume * 100)}%`}
-                  <input
-                    type="range"
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    value={pip.volume}
-                    onChange={(e) => {
-                      recordSliderHistory();
-                      setPip(setPipVolume(pip, parseFloat(e.target.value)));
-                    }}
-                  />
-                </label>
-                <div className="row">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      recordHistory();
-                      setPip(setPipMuted(pip, !pip.muted));
-                    }}
-                  >
-                    {pip.muted ? "Unmute overlay" : "Mute overlay"}
-                  </button>
-                  <button type="button" onClick={() => pipInputRef.current?.click()}>
-                    Change video
-                  </button>
-                  <button type="button" onClick={removePip}>
-                    Remove
-                  </button>
-                </div>
+                {pips.map((pip) => (
+                  <div className="overlay-row" key={pip.id}>
+                    <span>
+                      {pip.name} · {formatTime(pip.start)} to {formatTime(pip.start + pip.duration)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedPipId(pip.id);
+                        seek(pip.start);
+                      }}
+                    >
+                      {selectedPipId === pip.id ? "Selected" : "Select"}
+                    </button>
+                  </div>
+                ))}
+                {selectedPip ? (
+                  <>
+                    <p>
+                      <strong>{selectedPip.name}</strong>
+                    </p>
+                    <p className="hint">
+                      {formatTime(selectedPip.start)} to {formatTime(selectedPip.start + selectedPip.duration)} on
+                      the timeline. Click the clip on the picture in picture track to jump to it.
+                    </p>
+                    <label>
+                      Corner
+                      <select
+                        value={selectedPip.position}
+                        onChange={(e) => {
+                          recordHistory();
+                          setPips((prev) => updatePipClip(prev, selectedPip.id, { position: e.target.value }));
+                        }}
+                      >
+                        {PIP_POSITIONS.map((p) => (
+                          <option key={p} value={p}>
+                            {p.replace("-", " ")}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Size
+                      <select
+                        value={selectedPip.size}
+                        onChange={(e) => {
+                          recordHistory();
+                          setPips((prev) => updatePipClip(prev, selectedPip.id, { size: e.target.value }));
+                        }}
+                      >
+                        {Object.keys(PIP_SIZES).map((s) => (
+                          <option key={s} value={s}>
+                            {s}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Volume: {selectedPip.muted ? "muted" : `${Math.round(selectedPip.volume * 100)}%`}
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={selectedPip.volume}
+                        onChange={(e) => {
+                          recordSliderHistory();
+                          setPips((prev) => setPipClipVolume(prev, selectedPip.id, parseFloat(e.target.value)));
+                        }}
+                      />
+                    </label>
+                    <div className="row">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          recordHistory();
+                          setPips((prev) => togglePipClipMuted(prev, selectedPip.id));
+                        }}
+                      >
+                        {selectedPip.muted ? "Unmute overlay" : "Mute overlay"}
+                      </button>
+                      <button type="button" onClick={() => pipInputRef.current?.click()}>
+                        Add another video
+                      </button>
+                      <button type="button" onClick={removePip}>
+                        Remove
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <p className="hint">Click an overlay above to change its corner, size or volume.</p>
+                )}
               </>
             ) : (
               <>
                 <p className="hint">
                   Add a second video and it will sit in a corner of the frame, in time with the preview and baked into
-                  the export.
+                  the export. Add as many as you like, each one keeps its own corner.
                 </p>
                 <button type="button" className="primary" onClick={() => pipInputRef.current?.click()}>
                   Add picture in picture

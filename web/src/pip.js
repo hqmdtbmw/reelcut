@@ -116,3 +116,59 @@ export function pipFileOffset(clip, time, fileDuration) {
   }
   return offset;
 }
+
+// More than one overlay at a time. The editor keeps a list of
+// overlay clips, each with its own video, corner, size, volume
+// and mute. The helpers below work on that list, and they never
+// change the list in place, so undo history stays honest.
+
+// Read the overlay list out of a saved state. Old saves kept a
+// single clip under `pip`, so that one becomes a one-item list
+// and nothing is lost. A state with no overlays at all gives an
+// empty list.
+export function pipsFromState(state) {
+  if (!state) return [];
+  if (Array.isArray(state.pips)) return state.pips.map((c) => ({ ...c }));
+  if (state.pip) return [{ ...state.pip }];
+  return [];
+}
+
+// Add an overlay to the end of the list. Adding a second one no
+// longer replaces the first, each one keeps its own place.
+export function addPipClip(list, clip) {
+  return [...(list || []), clip];
+}
+
+// Take one overlay out of the list, leaving the rest alone.
+export function removePipClip(list, id) {
+  return (list || []).filter((c) => c.id !== id);
+}
+
+// Change one overlay in the list, leaving the rest alone.
+export function updatePipClip(list, id, patch) {
+  return (list || []).map((c) => (c.id === id ? { ...c, ...patch } : c));
+}
+
+// Set one overlay's volume, using the same rules as the single
+// overlay setter: dragging the volume up unmutes it.
+export function setPipClipVolume(list, id, volume) {
+  return (list || []).map((c) => (c.id === id ? setPipVolume(c, volume) : c));
+}
+
+// Flip one overlay's mute flag, keeping its volume for later.
+export function togglePipClipMuted(list, id) {
+  return (list || []).map((c) => (c.id === id ? setPipMuted(c, !c.muted) : c));
+}
+
+// Which overlays are on screen at a point on the timeline.
+export function visiblePipsAtTime(list, time) {
+  return (list || []).filter((c) => pipVisibleAtTime(c, time));
+}
+
+// Cut the overlays down to a shorter edit: overlays past the new
+// end go away, and one straddling the end is trimmed to it.
+export function cutdownPips(list, seconds) {
+  return (list || [])
+    .filter((c) => c.start < seconds)
+    .map((c) => (c.start + c.duration > seconds ? { ...c, duration: seconds - c.start } : c));
+}

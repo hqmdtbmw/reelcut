@@ -593,3 +593,62 @@ test("stopping the export stops the overlay sound too", async () => {
   assert.equal(ctx.sources[2].stopped, true);
   assert.equal(ctx.closed, true);
 });
+
+// More than one overlay at a time: every overlay sound mixes in.
+
+test("two overlays mix into the export side by side", async () => {
+  const ctx = new FakeAudioContext();
+  const clip = makeClip("a", "a.mp4", null, 20);
+  const second = fakePip({ start: 8, duration: 3, volume: 0.5 });
+  second.id = "pip-2";
+  const mix = await buildExportAudio({
+    createAudioContext: () => ctx,
+    video: {},
+    music: null,
+    firstClip: clip,
+    pips: [fakePip({ start: 2, duration: 4, volume: 0.9 }), second],
+  });
+  assert.equal(ctx.sources.length, 2);
+  assert.equal(ctx.sources[0].startWhen, 2);
+  assert.equal(ctx.sources[0].stopWhen, 6);
+  assert.equal(ctx.sources[1].startWhen, 8);
+  assert.equal(ctx.sources[1].stopWhen, 11);
+  assert.equal(ctx.gains[1].gain.value, 0.9);
+  assert.equal(ctx.gains[2].gain.value, 0.5);
+  assert.equal(mix.pipSources.length, 2);
+  assert.equal(mix.pipSource, ctx.sources[0]);
+});
+
+test("an unreadable overlay leaves the other overlay alone", async () => {
+  const ctx = new FakeAudioContext();
+  const second = fakePip({ start: 8, duration: 3, volume: 0.5 });
+  second.id = "pip-2";
+  const mix = await buildExportAudio({
+    createAudioContext: () => ctx,
+    video: {},
+    music: null,
+    firstClip: makeClip("a", "a.mp4", null, 20),
+    pips: [fakePip({ unreadable: true }), second],
+  });
+  assert.equal(ctx.sources.length, 1);
+  assert.equal(ctx.sources[0].startWhen, 8);
+  assert.equal(mix.pipSources.length, 1);
+  assert.equal(mix.pipSource, ctx.sources[0]);
+});
+
+test("stopping the export stops every overlay sound", async () => {
+  const ctx = new FakeAudioContext();
+  const second = fakePip({ start: 8, duration: 3, volume: 0.5 });
+  second.id = "pip-2";
+  const mix = await buildExportAudio({
+    createAudioContext: () => ctx,
+    video: {},
+    music: null,
+    firstClip: makeClip("a", "a.mp4", null, 20),
+    pips: [fakePip({ start: 2, duration: 4 }), second],
+  });
+  stopExportAudio(mix);
+  assert.equal(ctx.sources[0].stopped, true);
+  assert.equal(ctx.sources[1].stopped, true);
+  assert.equal(ctx.closed, true);
+});

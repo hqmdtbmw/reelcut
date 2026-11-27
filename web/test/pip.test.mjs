@@ -2,14 +2,22 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   PIP_POSITIONS,
+  addPipClip,
   clampPipClip,
   clampPipVolume,
+  cutdownPips,
   makePipClip,
   pipFileOffset,
   pipRect,
   pipVisibleAtTime,
+  pipsFromState,
+  removePipClip,
+  setPipClipVolume,
   setPipMuted,
   setPipVolume,
+  togglePipClipMuted,
+  updatePipClip,
+  visiblePipsAtTime,
 } from "../src/pip.js";
 
 function pip(start = 2, duration = 4, position = "bottom-right", size = "medium") {
@@ -157,4 +165,86 @@ test("clamping fills in volume and mute on an overlay saved before they existed"
   assert.equal(clampPipVolume("loud"), 1);
   assert.equal(clampPipClip({ ...pip(), volume: 2, muted: "yes" }, 30).volume, 1);
   assert.equal(clampPipClip({ ...pip(), volume: 2, muted: "yes" }, 30).muted, true);
+});
+
+// More than one overlay at a time.
+
+test("adding a second overlay keeps the first one", () => {
+  const first = pip(2, 4);
+  const second = makePipClip("pip-2", "other.mp4", null, 8, 3, "top-left", "small", 10);
+  const list = addPipClip(addPipClip([], first), second);
+  assert.equal(list.length, 2);
+  assert.equal(list[0].id, "pip-1");
+  assert.equal(list[1].id, "pip-2");
+  assert.equal(list[1].position, "top-left");
+});
+
+test("removing one overlay leaves the rest alone", () => {
+  const first = pip(2, 4);
+  const second = makePipClip("pip-2", "other.mp4", null, 8, 3, "top-left", "small", 10);
+  const list = removePipClip([first, second], "pip-1");
+  assert.equal(list.length, 1);
+  assert.equal(list[0].id, "pip-2");
+  assert.deepEqual(removePipClip([first], "pip-9"), [first]);
+});
+
+test("updating one overlay leaves the rest alone", () => {
+  const first = pip(2, 4);
+  const second = makePipClip("pip-2", "other.mp4", null, 8, 3, "top-left", "small", 10);
+  const list = updatePipClip([first, second], "pip-2", { position: "bottom-left", size: "large" });
+  assert.equal(list[0].position, "bottom-right");
+  assert.equal(list[1].position, "bottom-left");
+  assert.equal(list[1].size, "large");
+});
+
+test("setting one overlay volume unmutes it, the others keep theirs", () => {
+  const first = { ...pip(2, 4), muted: true, volume: 0.6 };
+  const second = makePipClip("pip-2", "other.mp4", null, 8, 3, "top-left", "small", 10);
+  const list = setPipClipVolume([first, second], "pip-1", 0.5);
+  assert.equal(list[0].volume, 0.5);
+  assert.equal(list[0].muted, false);
+  assert.equal(list[1].volume, 1);
+  assert.equal(list[1].muted, false);
+});
+
+test("muting one overlay keeps its volume and leaves the other alone", () => {
+  const first = pip(2, 4);
+  const second = makePipClip("pip-2", "other.mp4", null, 8, 3, "top-left", "small", 10);
+  const list = togglePipClipMuted([first, second], "pip-2");
+  assert.equal(list[0].muted, false);
+  assert.equal(list[1].muted, true);
+  assert.equal(list[1].volume, 1);
+  const back = togglePipClipMuted(list, "pip-2");
+  assert.equal(back[1].muted, false);
+});
+
+test("only the overlays on screen at a time count as visible", () => {
+  const first = pip(2, 4);
+  const second = makePipClip("pip-2", "other.mp4", null, 8, 3, "top-left", "small", 10);
+  assert.deepEqual(visiblePipsAtTime([first, second], 3).map((c) => c.id), ["pip-1"]);
+  assert.deepEqual(visiblePipsAtTime([first, second], 9).map((c) => c.id), ["pip-2"]);
+  assert.deepEqual(visiblePipsAtTime([first, second], 7), []);
+  assert.deepEqual(visiblePipsAtTime([], 3), []);
+});
+
+test("a cutdown drops overlays past the end and trims a straddler", () => {
+  const first = pip(2, 4);
+  const second = makePipClip("pip-2", "other.mp4", null, 8, 5, "top-left", "small", 10);
+  const third = makePipClip("pip-3", "third.mp4", null, 15, 3, "top-right", "small", 10);
+  const list = cutdownPips([first, second, third], 10);
+  assert.equal(list.length, 2);
+  assert.equal(list[0].duration, 4);
+  assert.equal(list[1].duration, 2);
+  assert.equal(list[1].start, 8);
+});
+
+test("a saved single overlay migrates into a one-item list", () => {
+  const single = pip(2, 4);
+  assert.deepEqual(pipsFromState({ pip: single }), [single]);
+  assert.deepEqual(pipsFromState({ pips: [single] }), [single]);
+  assert.deepEqual(pipsFromState({}), []);
+  assert.deepEqual(pipsFromState(null), []);
+  const migrated = pipsFromState({ pip: single });
+  migrated[0].position = "top-left";
+  assert.equal(single.position, "bottom-right");
 });

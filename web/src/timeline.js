@@ -3,6 +3,8 @@
 // app keeps working even before the WASM module loads. When the WASM
 // module is ready the app uses the Rust code for silence detection.
 
+import { pipsFromState } from "./pip.js";
+
 export function makeClip(id, name, url, sourceDuration) {
   return {
     id,
@@ -375,7 +377,8 @@ export const HISTORY_LIMIT = 50;
 
 // A plain snapshot of the edit, safe to store and restore later.
 // Old snapshots without an audio track still restore fine, and
-// old snapshots without a picture in picture clip count as none.
+// old snapshots with a single picture in picture clip under `pip`
+// come back as a one-item list, so nothing is lost.
 export function snapshotState(state) {
   return {
     clips: state.clips.map((c) => ({ ...c, effects: { ...c.effects } })),
@@ -383,7 +386,7 @@ export function snapshotState(state) {
     captions: state.captions.map((c) => ({ ...c })),
     audioClips: (state.audioClips || []).map((c) => ({ ...c })),
     music: state.music ? { ...state.music } : null,
-    pip: state.pip ? { ...state.pip } : null,
+    pips: pipsFromState(state),
   };
 }
 
