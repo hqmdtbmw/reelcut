@@ -825,3 +825,45 @@ export function respeedAudioClips(audioClips, oldClips, newClips) {
   }
   return out;
 }
+
+// Move the picture in picture overlays through a speed change, the
+// same way the audio track moves. Speeding the whole edit up or down,
+// or changing one clip's speed, stretches or squeezes the video
+// clips, so a point on the old timeline lands somewhere else on the
+// new one. Each overlay is remapped through that same move: its start
+// and its end are mapped, and the duration is what is left between
+// them. An overlay that ends up past the new end of the edit goes
+// away, one that straddles the end is trimmed to it. The corner,
+// size, volume and mute survive the move, since only the timing
+// changes. With no overlays there is nothing to move, and with no
+// video clips there is nothing to map against, so the list is left
+// alone. The preview and the export both place an overlay from its
+// start and duration and play it at the speed of the clip underneath,
+// so the remap alone keeps them in step, no playback change needed.
+export function respeedPips(pips, oldClips, newClips) {
+  if (!pips.length) return [];
+  const oldPacked = packClips(oldClips);
+  const newPacked = packClips(newClips);
+  if (!oldPacked.length || !newPacked.length) return pips;
+  const oldTotal = totalDuration(oldClips);
+  const newTotal = totalDuration(newClips);
+  const mapTime = (t) => {
+    if (t <= 0) return 0;
+    if (t >= oldTotal) return newTotal;
+    const idx = oldPacked.findIndex((c) => t >= c.start && t < c.start + clipDuration(c));
+    if (idx === -1) return newTotal;
+    const oldClip = oldPacked[idx];
+    const newClip = newPacked[idx];
+    const oldLen = clipDuration(oldClip);
+    const ratio = oldLen > 0 ? clipDuration(newClip) / oldLen : 0;
+    return newClip.start + (t - oldClip.start) * ratio;
+  };
+  const out = [];
+  for (const pip of pips) {
+    const start = mapTime(pip.start);
+    const end = mapTime(pip.start + pip.duration);
+    if (start >= newTotal || end <= start) continue;
+    out.push({ ...pip, start, duration: end - start });
+  }
+  return out;
+}

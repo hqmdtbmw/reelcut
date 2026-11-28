@@ -41,6 +41,7 @@ import {
   redoHistory,
   removeAudioClip,
   respeedAudioClips,
+  respeedPips,
   setAudioClipMuted,
   setAudioClipVolume,
   setClipEffects,
@@ -977,6 +978,104 @@ test("audio before the changed clip does not move", () => {
     makeAudioClip("after", "after.mp3", null, 12, 2),
   ];
   const out = respeedAudioClips(clips, twoClips(), respeedOne("b", 2));
+  assert.equal(out.length, 2);
+  assert.deepEqual(
+    out.map((c) => [c.id, c.start, c.duration]),
+    [
+      ["before", 2, 3],
+      ["after", 11, 1],
+    ],
+  );
+});
+
+// Respeeding the picture in picture overlays: they follow the same
+// time mapping as the audio track, so each overlay stays over the
+// part of the video it belongs to after a speed change.
+
+function pipClip(id, start, duration, position = "bottom-right", size = "medium") {
+  return makePipClip(id, "facecam.mp4", null, start, duration, position, size, 10);
+}
+
+test("respeeding the overlays follows a whole-edit speed up", () => {
+  const pips = [pipClip("early", 2, 5), pipClip("straddler", 8, 6)];
+  const out = respeedPips(pips, twoClips(), respeedTo(2));
+  assert.equal(out.length, 2);
+  assert.deepEqual(
+    out.map((c) => [c.id, c.start, c.duration]),
+    [
+      ["early", 1, 2.5],
+      ["straddler", 4, 3],
+    ],
+  );
+});
+
+test("respeeding the overlays follows a whole-edit slow down", () => {
+  const clip = { ...pipClip("voice", 2, 5, "top-left", "small"), volume: 0.5, muted: true };
+  const out = respeedPips([clip], twoClips(), respeedTo(0.5));
+  assert.equal(out.length, 1);
+  assert.equal(out[0].start, 4);
+  assert.equal(out[0].duration, 10);
+  assert.equal(out[0].position, "top-left");
+  assert.equal(out[0].size, "small");
+  assert.equal(out[0].volume, 0.5);
+  assert.equal(out[0].muted, true);
+});
+
+test("respeeding drops overlays past the new end and trims straddlers", () => {
+  const pips = [
+    pipClip("inside", 2, 2),
+    pipClip("straddler", 14, 4),
+    pipClip("past", 17, 2),
+  ];
+  const out = respeedPips(pips, twoClips(), respeedTo(2));
+  assert.equal(out.length, 2);
+  assert.deepEqual(
+    out.map((c) => [c.id, c.start, c.duration]),
+    [
+      ["inside", 1, 1],
+      ["straddler", 7, 1],
+    ],
+  );
+});
+
+test("respeeding an empty overlay list stays empty", () => {
+  assert.deepEqual(respeedPips([], twoClips(), respeedTo(2)), []);
+  assert.deepEqual(respeedPips([], twoClips(), respeedTo(0.5)), []);
+});
+
+test("respeeding with no video clips leaves the overlays alone", () => {
+  const pips = [pipClip("one", 2, 3), pipClip("two", 8, 2)];
+  assert.deepEqual(respeedPips(pips, [], respeedTo(2)), pips);
+});
+
+test("speeding up the first clip squeezes an overlay inside it and moves later overlays earlier", () => {
+  const pips = [
+    pipClip("before", 2, 3),
+    pipClip("straddler", 8, 6),
+    pipClip("after", 12, 2),
+  ];
+  const out = respeedPips(pips, twoClips(), respeedOne("a", 2));
+  assert.equal(out.length, 3);
+  assert.deepEqual(
+    out.map((c) => [c.id, c.start, c.duration]),
+    [
+      ["before", 1, 1.5],
+      ["straddler", 4, 5],
+      ["after", 7, 2],
+    ],
+  );
+});
+
+test("slowing down one clip only pushes later overlays later", () => {
+  const out = respeedPips([pipClip("later", 12, 2)], twoClips(), respeedOne("b", 0.5));
+  assert.equal(out.length, 1);
+  assert.equal(out[0].start, 14);
+  assert.equal(out[0].duration, 4);
+});
+
+test("an overlay before the changed clip does not move", () => {
+  const pips = [pipClip("before", 2, 3), pipClip("after", 12, 2)];
+  const out = respeedPips(pips, twoClips(), respeedOne("b", 2));
   assert.equal(out.length, 2);
   assert.deepEqual(
     out.map((c) => [c.id, c.start, c.duration]),

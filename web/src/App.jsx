@@ -29,6 +29,7 @@ import {
   redoHistory,
   removeAudioClip,
   respeedAudioClips,
+  respeedPips,
   setAudioClipVolume,
   setClipEffects,
   setClipMuted,
@@ -435,14 +436,16 @@ export default function App() {
   function updateClip(id, patch) {
     recordSliderHistory();
     if (patch.speed !== undefined) {
-      // A clip's own speed moves the audio track with it, the same
-      // way the whole-edit speed change does, so a voiceover stays
-      // lined up with the video after one clip speeds up or slows
-      // down. Every other patch leaves the track where it is.
+      // A clip's own speed moves the audio track and the overlays
+      // with it, the same way the whole-edit speed change does, so
+      // a voiceover and each overlay stay lined up with the video
+      // after one clip speeds up or slows down. Every other patch
+      // leaves them where they are.
       const oldClips = clipsRef.current;
       const next = oldClips.map((c) => (c.id === id ? { ...c, ...patch } : c));
       setClips(next);
       setAudioClips((prev) => respeedAudioClips(prev, oldClips, next));
+      setPips((prev) => respeedPips(prev, oldClips, next));
       return;
     }
     setClips((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
@@ -938,13 +941,15 @@ export default function App() {
         recordHistory();
         const next = clips.map((c) => ({ ...c, speed: parsed.factor }));
         setClips(next);
-        // The audio track moves with the speed change, through the
-        // same time mapping as the video, so a voiceover stays
-        // lined up with the video.
+        // The audio track and the overlays move with the speed
+        // change, through the same time mapping as the video, so a
+        // voiceover and each overlay stay lined up with the video.
         setAudioClips((prev) => respeedAudioClips(prev, clips, next));
+        setPips((prev) => respeedPips(prev, clips, next));
         const audioNote = audioClipsRef.current.length ? " The audio track moved with it." : "";
+        const pipNote = pipsRef.current.length ? " The overlays moved with it." : "";
         const verb = parsed.factor >= 1 ? "Sped the whole thing up" : "Slowed the whole thing down";
-        setAgentSay(`${verb} to ${parsed.factor}x. It now runs ${totalDuration(next).toFixed(1)} seconds.${audioNote}`);
+        setAgentSay(`${verb} to ${parsed.factor}x. It now runs ${totalDuration(next).toFixed(1)} seconds.${audioNote}${pipNote}`);
         return;
       }
       case "split-at": {
