@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   CROSSFADE_DEFAULT,
+  CROSSFADE_MAX,
   addAudioClip,
   adjustClipEffect,
   adjustClipVolume,
@@ -16,6 +17,8 @@ import {
   clipFadeOpacity,
   clipFilter,
   crossfadeAtTime,
+  crossfadeAllStored,
+  crossfadeStored,
   cutRange,
   cutdown,
   cutdownAudioClips,
@@ -791,16 +794,37 @@ export default function App() {
 
   // Turn the crossfade on a join on or off. The marker between two
   // clips on the timeline calls this, so does the panel slider's
-  // neighbour. A fresh crossfade starts at half a second.
+  // neighbour. A fresh crossfade starts at half a second, but the
+  // reply quotes the length that was actually stored, since short
+  // clips only hold a short dissolve.
   function toggleJoin(left, right) {
     const d = transitionDuration(left, right);
+    if (d > 0) {
+      recordHistory();
+      setClips((prev) => setTransitionIn(prev, right.id, 0));
+      setAgentSay(`Took the crossfade out between ${left.name} and ${right.name}.`);
+      return;
+    }
+    const stored = crossfadeStored(left, right, CROSSFADE_DEFAULT);
+    if (stored.seconds <= 0) {
+      setAgentSay(`Those two clips are too short for a crossfade, so nothing changed.`);
+      return;
+    }
     recordHistory();
-    setClips((prev) => setTransitionIn(prev, right.id, d > 0 ? 0 : CROSSFADE_DEFAULT));
-    setAgentSay(
-      d > 0
-        ? `Took the crossfade out between ${left.name} and ${right.name}.`
-        : `Added a ${CROSSFADE_DEFAULT} second crossfade between ${left.name} and ${right.name}.`,
-    );
+    setClips((prev) => setTransitionIn(prev, right.id, CROSSFADE_DEFAULT));
+    if (stored.shortened) {
+      setAgentSay(
+        `Added a ${stored.seconds} second crossfade between ${left.name} and ${right.name}. The clips were too short for the full ${CROSSFADE_DEFAULT} seconds.`,
+      );
+    } else if (stored.capped) {
+      setAgentSay(
+        `Added a ${stored.seconds} second crossfade between ${left.name} and ${right.name}. Crossfades run at most ${CROSSFADE_MAX} seconds.`,
+      );
+    } else {
+      setAgentSay(
+        `Added a ${stored.seconds} second crossfade between ${left.name} and ${right.name}.`,
+      );
+    }
   }
 
   function startTrim(e, clip, edge) {
@@ -1212,17 +1236,51 @@ export default function App() {
             `Clip ${parsed.index + 1} and clip ${parsed.rightIndex + 1} are not next to each other, so there is no join between them.`,
           );
         }
+        // The reply quotes the length that was actually stored,
+        // not the length asked for: short clips only hold a short
+        // dissolve, and nothing at all when they are too short.
+        const stored = crossfadeStored(left, right, parsed.seconds);
+        if (stored.seconds <= 0) {
+          return setAgentSay(`Those two clips are too short for a crossfade, so nothing changed.`);
+        }
         recordHistory();
         setClips(setTransitionIn(clips, right.id, parsed.seconds));
-        const seconds = transitionDuration(left, { ...right, transitionIn: parsed.seconds });
-        setAgentSay(`Added a ${seconds} second crossfade between ${left.name} and ${right.name}.`);
+        if (stored.shortened) {
+          setAgentSay(
+            `Added a ${stored.seconds} second crossfade between ${left.name} and ${right.name}. The clips were too short for the full ${parsed.seconds} seconds.`,
+          );
+        } else if (stored.capped) {
+          setAgentSay(
+            `Added a ${stored.seconds} second crossfade between ${left.name} and ${right.name}. Crossfades run at most ${CROSSFADE_MAX} seconds.`,
+          );
+        } else {
+          setAgentSay(
+            `Added a ${stored.seconds} second crossfade between ${left.name} and ${right.name}.`,
+          );
+        }
         return;
       }
       case "add-crossfade-all": {
         if (clips.length < 2) return setAgentSay("I need at least two clips to put crossfades between them.");
+        // Each join stores only what its own two clips allow, so
+        // the reply quotes the real lengths, not the one asked for.
+        const summary = crossfadeAllStored(clips, parsed.seconds);
+        if (summary.addedCount === 0) {
+          return setAgentSay("Those clips are too short for crossfades, so nothing changed.");
+        }
         recordHistory();
         setClips(setAllTransitionsIn(clips, parsed.seconds));
-        setAgentSay(`Added a ${parsed.seconds} second crossfade between every clip.`);
+        if (summary.allSame) {
+          setAgentSay(`Added a ${summary.shortest} second crossfade between every clip.`);
+        } else if (summary.addedCount === summary.joinCount) {
+          setAgentSay(
+            `Added crossfades between every clip, from ${summary.shortest} to ${summary.longest} seconds. The short joins had less room than the ${parsed.seconds} seconds you asked for.`,
+          );
+        } else {
+          setAgentSay(
+            `Added crossfades on ${summary.addedCount} of the ${summary.joinCount} joins, up to ${summary.longest} seconds. The rest stayed straight cuts, their clips were too short.`,
+          );
+        }
         return;
       }
       case "remove-crossfade": {

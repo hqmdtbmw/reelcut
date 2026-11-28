@@ -239,6 +239,45 @@ export function setAllTransitionsIn(clips, duration) {
   });
 }
 
+// What a requested crossfade actually becomes on one join: the
+// length that gets stored, and why it came up short, if it did.
+// Replies should quote the stored length, since that is what the
+// join really plays. A stored length of 0 means the clips were
+// too short for any crossfade at all. `shortened` is true only
+// when the clips themselves were too short; when the 2 second
+// ceiling is what cut it short, `capped` is true instead, since
+// the clips had room.
+export function crossfadeStored(left, right, requested) {
+  const seconds = clampTransitionDuration(requested, clipDuration(left), clipDuration(right));
+  return {
+    seconds,
+    shortened: seconds > 0 && seconds < requested && seconds < CROSSFADE_MAX,
+    capped: seconds > 0 && seconds < requested && seconds >= CROSSFADE_MAX,
+  };
+}
+
+// What a requested crossfade becomes on every join at once: the
+// length stored on each join, the shortest and longest real
+// dissolve, and how many joins got one at all. A short clip
+// stores a short dissolve, so the reply quotes these real
+// lengths instead of the length asked for. `shortest` and
+// `longest` only count joins that got a crossfade, so a join
+// that stayed a straight cut does not drag them to 0.
+export function crossfadeAllStored(clips, requested) {
+  const stored = setAllTransitionsIn(clips, requested);
+  const lengths = stored.slice(1).map((c) => c.transitionIn);
+  const added = lengths.filter((d) => d > 0);
+  return {
+    lengths,
+    shortest: added.length ? Math.min(...added) : 0,
+    longest: added.length ? Math.max(...added) : 0,
+    addedCount: added.length,
+    joinCount: lengths.length,
+    allSame:
+      lengths.length > 0 && lengths[0] > 0 && lengths.every((d) => d === lengths[0]),
+  };
+}
+
 // Take every crossfade out, back to straight cuts.
 export function clearAllTransitionsIn(clips) {
   return clips.map((c) => ({ ...c, transitionIn: 0 }));

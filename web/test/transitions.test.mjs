@@ -7,7 +7,9 @@ import {
   clearAllTransitionsIn,
   clampTransitionDuration,
   clipFadeOpacity,
+  crossfadeAllStored,
   crossfadeAtTime,
+  crossfadeStored,
   cutRange,
   deleteClip,
   makeClip,
@@ -159,6 +161,84 @@ test("crossfades on every join store only what each join allows", () => {
   );
   assert.equal(transitionDuration(all[0], all[1]), 0.4);
   assert.equal(transitionDuration(all[1], all[2]), 0.4);
+});
+
+test("a crossfade reply quotes the length that was actually stored", () => {
+  // A normal join stores the length asked for.
+  const [a, b] = twoClips();
+  assert.deepEqual(crossfadeStored(a, b, 0.5), { seconds: 0.5, shortened: false, capped: false });
+  // Short clips store less, and say so.
+  const short = [makeClip("a", "a.mp4", null, 0.4), makeClip("b", "b.mp4", null, 10)];
+  assert.deepEqual(crossfadeStored(short[0], short[1], 0.5), {
+    seconds: 0.4,
+    shortened: true,
+    capped: false,
+  });
+  // The stored length matches what the setter writes, so the reply
+  // and the join agree.
+  const stored = setTransitionIn(short, "b", 0.5);
+  assert.equal(crossfadeStored(short[0], short[1], 0.5).seconds, stored[1].transitionIn);
+  // Clips with no room at all store nothing.
+  const empty = [makeClip("a", "a.mp4", null, 0), makeClip("b", "b.mp4", null, 10)];
+  assert.deepEqual(crossfadeStored(empty[0], empty[1], 0.5), {
+    seconds: 0,
+    shortened: false,
+    capped: false,
+  });
+  // Asking for more than the 2 second ceiling caps it, and that is
+  // not the clips being too short.
+  assert.deepEqual(crossfadeStored(a, b, 5), { seconds: 2, shortened: false, capped: true });
+  // Bad input stores nothing.
+  assert.deepEqual(crossfadeStored(a, b, NaN), { seconds: 0, shortened: false, capped: false });
+});
+
+test("crossfades on every join report the real lengths", () => {
+  // Every join the same length when every clip has room.
+  const even = crossfadeAllStored(threeClips(), 1);
+  assert.deepEqual(even.lengths, [1, 1]);
+  assert.equal(even.shortest, 1);
+  assert.equal(even.longest, 1);
+  assert.equal(even.addedCount, 2);
+  assert.equal(even.joinCount, 2);
+  assert.equal(even.allSame, true);
+  // Joins on short clips store less, so the lengths differ.
+  const mixed = [
+    makeClip("a", "a.mp4", null, 10),
+    makeClip("b", "b.mp4", null, 1),
+    makeClip("c", "c.mp4", null, 0.3),
+  ];
+  const uneven = crossfadeAllStored(mixed, 1);
+  assert.deepEqual(uneven.lengths, [1, 0.3]);
+  assert.equal(uneven.shortest, 0.3);
+  assert.equal(uneven.longest, 1);
+  assert.equal(uneven.addedCount, 2);
+  assert.equal(uneven.allSame, false);
+  // The lengths match what the setter writes on every join.
+  const stored = setAllTransitionsIn(mixed, 1);
+  assert.deepEqual(uneven.lengths, stored.slice(1).map((c) => c.transitionIn));
+  // A join with no room at all stays a straight cut, and does not
+  // drag the shortest real dissolve down to 0.
+  const gapped = [
+    makeClip("a", "a.mp4", null, 10),
+    makeClip("b", "b.mp4", null, 10),
+    makeClip("c", "c.mp4", null, 0),
+    makeClip("d", "d.mp4", null, 10),
+  ];
+  const partial = crossfadeAllStored(gapped, 1);
+  assert.deepEqual(partial.lengths, [1, 0, 0]);
+  assert.equal(partial.shortest, 1);
+  assert.equal(partial.longest, 1);
+  assert.equal(partial.addedCount, 1);
+  assert.equal(partial.joinCount, 3);
+  assert.equal(partial.allSame, false);
+  // No join with room means nothing was added.
+  const none = crossfadeAllStored(
+    [makeClip("a", "a.mp4", null, 0), makeClip("b", "b.mp4", null, 10)],
+    1,
+  );
+  assert.deepEqual(none.lengths, [0]);
+  assert.equal(none.addedCount, 0);
+  assert.equal(none.allSame, false);
 });
 
 test("splitting a clip leaves a straight cut between the halves", () => {
