@@ -169,6 +169,13 @@ header.top p {
   background: #000;
 }
 
+.preview-wrap video.transition-video {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .overlay-text {
   position: absolute;
   transform: translate(-50%, -50%);
@@ -281,6 +288,26 @@ header.top p {
 .clip-block .clip-meta {
   font-size: 12px;
   color: var(--muted);
+}
+
+.join-marker {
+  flex: 0 0 20px;
+  align-self: stretch;
+  border: 1px dashed var(--line);
+  background: transparent;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.join-marker.on {
+  border-style: solid;
+  border-color: var(--yellow);
+  background: var(--yellow-soft);
+  color: var(--ink);
 }
 
 .clip-edge {

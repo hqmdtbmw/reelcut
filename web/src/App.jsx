@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
+  CROSSFADE_DEFAULT,
   addAudioClip,
   adjustClipEffect,
   adjustClipVolume,
@@ -8,10 +9,13 @@ import {
   boringRanges,
   canRedo,
   canUndo,
+  clearAllTransitionsIn,
   clampMusicVolume,
   clipAtTime,
   clipDuration,
+  clipFadeOpacity,
   clipFilter,
+  crossfadeAtTime,
   cutRange,
   cutdown,
   cutdownAudioClips,
@@ -31,10 +35,12 @@ import {
   removeAudioClip,
   respeedAudioClips,
   respeedPips,
+  setAllTransitionsIn,
   setAudioClipVolume,
   setClipEffects,
   setClipMuted,
   setClipVolume,
+  setTransitionIn,
   shiftAudioClips,
   shiftTimedItems,
   shortcutForEvent,
@@ -43,6 +49,7 @@ import {
   splitClip,
   toggleAudioClipMuted,
   totalDuration,
+  transitionDuration,
   trimClip,
   undoHistory,
 } from "./timeline.js";
@@ -99,6 +106,7 @@ export default function App() {
   const [selectedPipId, setSelectedPipId] = useState(null);
 
   const videoRef = useRef(null);
+  const transitionVideoRef = useRef(null);
   const pipVideoElsRef = useRef(new Map());
   const pipInputRef = useRef(null);
   const trackRef = useRef(null);
@@ -131,6 +139,8 @@ export default function App() {
   const packed = useMemo(() => packClips(clips), [clips]);
   const total = useMemo(() => totalDuration(clips), [clips]);
   const selected = packed.find((c) => c.id === selectedId) || null;
+  const selectedIndex = packed.findIndex((c) => c.id === selectedId);
+  const nextClip = selectedIndex >= 0 ? packed[selectedIndex + 1] || null : null;
   const selectedAudio = audioClips.find((c) => c.id === selectedAudioId) || null;
   const currentClip = clipAtTime(packed, playhead);
   const activeOverlays = overlays.filter((o) => playhead >= o.start && playhead < o.end);
@@ -293,6 +303,42 @@ export default function App() {
     video.volume = effectiveVolume(currentClip);
   }, [playhead, currentClip]);
 
+  // Scrubbing into a dissolve while paused shows the same blend as
+  // playback does: the main video at its share of the dissolve and
+  // the second video frozen on the other clip's edge frame. The
+  // tick above owns this while the video plays.
+  useEffect(() => {
+    if (playing) return;
+    const video = videoRef.current;
+    const blendVideo = transitionVideoRef.current;
+    if (!video || !currentClip) {
+      if (blendVideo) blendVideo.style.opacity = "0";
+      return;
+    }
+    const blend = crossfadeAtTime(packed, playhead);
+    if (blend) {
+      const incomingIsCurrent = playhead >= blend.join;
+      video.style.opacity = String(
+        clipFadeOpacity(currentClip, playhead) * (incomingIsCurrent ? blend.progress : 1 - blend.progress),
+      );
+      if (blendVideo) {
+        const other = incomingIsCurrent ? blend.left : blend.right;
+        const frozen = incomingIsCurrent ? other.sourceOut - 0.05 : other.sourceIn;
+        if (blendVideo.dataset.clip !== other.id) {
+          blendVideo.dataset.clip = other.id;
+          blendVideo.src = other.url;
+        }
+        if (Math.abs(blendVideo.currentTime - frozen) > 0.3) {
+          blendVideo.currentTime = Math.max(0, frozen);
+        }
+        blendVideo.style.opacity = String(incomingIsCurrent ? 1 - blend.progress : blend.progress);
+      }
+    } else {
+      video.style.opacity = String(clipFadeOpacity(currentClip, playhead));
+      if (blendVideo) blendVideo.style.opacity = "0";
+    }
+  }, [playing, playhead, packed, currentClip]);
+
   // Keep every picture in picture video in step with the
   // playhead. Each one plays at the speed of the video clip
   // underneath, and loops when its file runs out before the
@@ -358,14 +404,39 @@ export default function App() {
       }
       const t = clip.start + (sourceTime - clip.sourceIn) / clip.speed;
       setPlayhead(t);
-      let opacity = 1;
-      if (clip.fadeIn > 0 && t - clip.start < clip.fadeIn) {
-        opacity = Math.max(0, (t - clip.start) / clip.fadeIn);
+      // The dissolve over a join: the main video shows the clip
+      // under the playhead, and a second video stacked over it
+      // shows the other clip in the join, frozen on its first
+      // frame before the cut and its last frame after it, since
+      // the clips sit back to back with no spare frames. Their
+      // opacities add up to the full picture, so one dissolves
+      // into the other across the join.
+      const blend = crossfadeAtTime(packClips(clipsRef.current), t);
+      const blendVideo = transitionVideoRef.current;
+      if (blend) {
+        const incomingIsCurrent = t >= blend.join;
+        video.style.opacity = String(
+          clipFadeOpacity(clip, t) * (incomingIsCurrent ? blend.progress : 1 - blend.progress),
+        );
+        if (blendVideo) {
+          const other = incomingIsCurrent ? blend.left : blend.right;
+          const frozen = incomingIsCurrent ? other.sourceOut - 0.05 : other.sourceIn;
+          if (blendVideo.dataset.clip !== other.id) {
+            blendVideo.dataset.clip = other.id;
+            blendVideo.src = other.url;
+          }
+          if (Math.abs(blendVideo.currentTime - frozen) > 0.3) {
+            blendVideo.currentTime = Math.max(0, frozen);
+          }
+          blendVideo.style.opacity = String(incomingIsCurrent ? 1 - blend.progress : blend.progress);
+        }
+      } else {
+        video.style.opacity = String(clipFadeOpacity(clip, t));
+        if (blendVideo) {
+          blendVideo.style.opacity = "0";
+          blendVideo.pause();
+        }
       }
-      if (clip.fadeOut > 0 && clip.start + clipDuration(clip) - t < clip.fadeOut) {
-        opacity = Math.min(opacity, Math.max(0, (clip.start + clipDuration(clip) - t) / clip.fadeOut));
-      }
-      video.style.opacity = String(opacity);
       video.play().catch(() => {});
       raf = requestAnimationFrame(tick);
     };
@@ -709,6 +780,20 @@ export default function App() {
     if (next === clips) return;
     recordHistory();
     setClips(next);
+  }
+
+  // Turn the crossfade on a join on or off. The marker between two
+  // clips on the timeline calls this, so does the panel slider's
+  // neighbour. A fresh crossfade starts at half a second.
+  function toggleJoin(left, right) {
+    const d = transitionDuration(left, right);
+    recordHistory();
+    setClips((prev) => setTransitionIn(prev, right.id, d > 0 ? 0 : CROSSFADE_DEFAULT));
+    setAgentSay(
+      d > 0
+        ? `Took the crossfade out between ${left.name} and ${right.name}.`
+        : `Added a ${CROSSFADE_DEFAULT} second crossfade between ${left.name} and ${right.name}.`,
+    );
   }
 
   function startTrim(e, clip, edge) {
@@ -1109,6 +1194,58 @@ export default function App() {
         setClips(clips.map((c) => ({ ...c, fadeIn: parsed.seconds, fadeOut: parsed.seconds })));
         setAgentSay(`Added a ${parsed.seconds} second fade at the start and end of every clip.`);
         return;
+      case "add-crossfade": {
+        if (clips.length < 2) return setAgentSay("I need at least two clips to put a crossfade between them.");
+        const { clip: left, error } = resolveCommandClip(parsed.index, "add a crossfade after it");
+        if (error) return setAgentSay(error);
+        const right = packed[packed.findIndex((c) => c.id === left.id) + 1];
+        if (!right) return setAgentSay(`${left.name} is the last clip, so there is no next clip to fade into.`);
+        if (parsed.rightIndex !== undefined && parsed.rightIndex !== packed.findIndex((c) => c.id === right.id)) {
+          return setAgentSay(
+            `Clip ${parsed.index + 1} and clip ${parsed.rightIndex + 1} are not next to each other, so there is no join between them.`,
+          );
+        }
+        recordHistory();
+        setClips(setTransitionIn(clips, right.id, parsed.seconds));
+        const seconds = transitionDuration(left, { ...right, transitionIn: parsed.seconds });
+        setAgentSay(`Added a ${seconds} second crossfade between ${left.name} and ${right.name}.`);
+        return;
+      }
+      case "add-crossfade-all": {
+        if (clips.length < 2) return setAgentSay("I need at least two clips to put crossfades between them.");
+        recordHistory();
+        setClips(setAllTransitionsIn(clips, parsed.seconds));
+        setAgentSay(`Added a ${parsed.seconds} second crossfade between every clip.`);
+        return;
+      }
+      case "remove-crossfade": {
+        if (clips.length < 2) return setAgentSay("There is no crossfade to remove yet.");
+        const { clip: left, error } = resolveCommandClip(parsed.index, "remove the crossfade after it");
+        if (error) return setAgentSay(error);
+        const right = packed[packed.findIndex((c) => c.id === left.id) + 1];
+        if (!right) return setAgentSay(`${left.name} is the last clip, so there is no crossfade after it.`);
+        if (parsed.rightIndex !== undefined && parsed.rightIndex !== packed.findIndex((c) => c.id === right.id)) {
+          return setAgentSay(
+            `Clip ${parsed.index + 1} and clip ${parsed.rightIndex + 1} are not next to each other, so there is no join between them.`,
+          );
+        }
+        if (!transitionDuration(left, right)) {
+          return setAgentSay(`There is no crossfade between ${left.name} and ${right.name}.`);
+        }
+        recordHistory();
+        setClips(setTransitionIn(clips, right.id, 0));
+        setAgentSay(`Took the crossfade out between ${left.name} and ${right.name}.`);
+        return;
+      }
+      case "remove-crossfade-all": {
+        if (!clips.some((c) => c.transitionIn > 0)) {
+          return setAgentSay("There are no crossfades to remove.");
+        }
+        recordHistory();
+        setClips(clearAllTransitionsIn(clips));
+        setAgentSay("Took all the crossfades out. The joins are straight cuts again.");
+        return;
+      }
       case "set-effect": {
         if (!clips.length) return setAgentSay("Import a video first.");
         const targets = parsed.scope === "all" || !selected ? packed.map((c) => c.id) : [selected.id];
@@ -1243,6 +1380,13 @@ export default function App() {
     const video = document.createElement("video");
     video.muted = false;
     video.crossOrigin = "anonymous";
+    // The second video for the dissolve: it holds the other clip
+    // in a join, frozen on its first or last frame, so the export
+    // can blend the two pictures. It stays muted, the sound still
+    // cuts at the join and only the picture dissolves.
+    const blendVideo = document.createElement("video");
+    blendVideo.muted = true;
+    blendVideo.crossOrigin = "anonymous";
     // The picture in picture overlays, drawn on top of each frame
     // while they are on screen. Each one plays at the speed of
     // the clip underneath, the same as in the preview, and loops
@@ -1356,6 +1500,31 @@ export default function App() {
             pipVideo.pause();
           }
         }
+        // Line the dissolve up too. A clip on the left of a join
+        // needs the next clip's first frame, a clip on the right
+        // needs the previous clip's last frame. A clip in the
+        // middle with a crossfade on both sides starts with the
+        // next clip's frame and swaps to the previous one when
+        // the second window opens, the frame loop below re-seeks
+        // it then.
+        const joinIndex = packed.findIndex((c) => c.id === clip.id);
+        const leftNeighbour = joinIndex > 0 ? packed[joinIndex - 1] : null;
+        const rightNeighbour = joinIndex < packed.length - 1 ? packed[joinIndex + 1] : null;
+        const dissolveRight =
+          rightNeighbour && transitionDuration(clip, rightNeighbour) > 0 ? rightNeighbour : null;
+        const dissolveLeft =
+          leftNeighbour && transitionDuration(leftNeighbour, clip) > 0 ? leftNeighbour : null;
+        if (dissolveRight || dissolveLeft) {
+          const other = dissolveRight || dissolveLeft;
+          const frozen = dissolveRight ? other.sourceIn : other.sourceOut - 0.05;
+          if (blendVideo.dataset.clip !== other.id) {
+            blendVideo.dataset.clip = other.id;
+            blendVideo.src = other.url;
+            await waitFor(blendVideo, "loadedmetadata");
+          }
+          blendVideo.currentTime = Math.max(0, frozen);
+          await waitFor(blendVideo, "seeked");
+        }
         while (video.currentTime < clip.sourceOut - 0.05) {
           const t = clipStart + (video.currentTime - clip.sourceIn) / clip.speed;
           ctx.fillStyle = "#000";
@@ -1365,10 +1534,33 @@ export default function App() {
           const scale = Math.max(width / vw, height / vh);
           const dw = vw * scale;
           const dh = vh * scale;
-          let alpha = 1;
-          if (clip.fadeIn > 0 && t - clipStart < clip.fadeIn) alpha = Math.max(0, (t - clipStart) / clip.fadeIn);
-          if (clip.fadeOut > 0 && clipStart + clipLen - t < clip.fadeOut) {
-            alpha = Math.min(alpha, Math.max(0, (clipStart + clipLen - t) / clip.fadeOut));
+          // The dissolve over a join: draw the other clip in the
+          // join first, frozen on its edge frame, then this clip
+          // over it at its share of the dissolve. The other clip
+          // gets its own colour effects, the same as the main one.
+          let alpha = clipFadeOpacity(clip, t);
+          const blend = crossfadeAtTime(packed, t);
+          if (blend) {
+            const other = clip.id === blend.left.id ? blend.right : blend.left;
+            const frozen = clip.id === blend.left.id ? other.sourceIn : other.sourceOut - 0.05;
+            if (blendVideo.dataset.clip !== other.id) {
+              blendVideo.dataset.clip = other.id;
+              blendVideo.src = other.url;
+            }
+            if (Math.abs(blendVideo.currentTime - frozen) > 0.3) {
+              blendVideo.currentTime = Math.max(0, frozen);
+            }
+            const ow = blendVideo.videoWidth || width;
+            const oh = blendVideo.videoHeight || height;
+            const oscale = Math.max(width / ow, height / oh);
+            const odw = ow * oscale;
+            const odh = oh * oscale;
+            const p = blend.progress;
+            ctx.globalAlpha = clip.id === blend.left.id ? p : 1 - p;
+            ctx.filter = clipFilter(other);
+            ctx.drawImage(blendVideo, (width - odw) / 2, (height - odh) / 2, odw, odh);
+            ctx.filter = "none";
+            alpha = alpha * (clip.id === blend.left.id ? 1 - p : p);
           }
           ctx.globalAlpha = alpha;
           ctx.filter = clipFilter(clip);
@@ -1427,6 +1619,7 @@ export default function App() {
     } finally {
       recorder.stop();
       video.pause();
+      blendVideo.pause();
       for (const pipVideo of pipVideos) pipVideo.pause();
       stopExportAudio(mix);
     }
@@ -1493,6 +1686,13 @@ export default function App() {
                   playsInline
                   preload="auto"
                   style={{ filter: currentClip ? clipFilter(currentClip) : "none" }}
+                />
+                <video
+                  ref={transitionVideoRef}
+                  className="transition-video"
+                  muted
+                  playsInline
+                  preload="auto"
                 />
                 {activeOverlays.map((o) => (
                   <div
@@ -1582,21 +1782,41 @@ export default function App() {
             <h2>Timeline</h2>
             <div className="track" ref={trackRef}>
               {packed.length === 0 && <p className="track-empty">Clips you import will show up here.</p>}
-              {packed.map((clip) => (
-                <div
-                  key={clip.id}
-                  className={`clip-block ${selectedId === clip.id ? "selected" : ""}`}
-                  style={{ width: `${total > 0 ? (clipDuration(clip) / total) * 100 : 0}%` }}
-                  onClick={() => setSelectedId(clip.id)}
-                >
-                  <div className="clip-edge left" onPointerDown={(e) => startTrim(e, clip, "left")} />
-                  <div className="clip-name">{clip.name}</div>
-                  <div className="clip-meta">
-                    {formatTime(clipDuration(clip))} · {clip.speed}x ·{" "}
-                    {clip.muted ? "muted" : `${Math.round(clip.volume * 100)}%`}
+              {packed.map((clip, i) => (
+                <Fragment key={clip.id}>
+                  {i > 0 && (
+                    <button
+                      type="button"
+                      className={`join-marker ${transitionDuration(packed[i - 1], clip) > 0 ? "on" : ""}`}
+                      title={
+                        transitionDuration(packed[i - 1], clip) > 0
+                          ? `Crossfade of ${transitionDuration(packed[i - 1], clip)} seconds between ${packed[i - 1].name} and ${clip.name}. Click to take it out.`
+                          : `Straight cut between ${packed[i - 1].name} and ${clip.name}. Click to add a crossfade.`
+                      }
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleJoin(packed[i - 1], clip);
+                      }}
+                    >
+                      {transitionDuration(packed[i - 1], clip) > 0
+                        ? `${transitionDuration(packed[i - 1], clip).toFixed(1)}s`
+                        : "+"}
+                    </button>
+                  )}
+                  <div
+                    className={`clip-block ${selectedId === clip.id ? "selected" : ""}`}
+                    style={{ width: `${total > 0 ? (clipDuration(clip) / total) * 100 : 0}%` }}
+                    onClick={() => setSelectedId(clip.id)}
+                  >
+                    <div className="clip-edge left" onPointerDown={(e) => startTrim(e, clip, "left")} />
+                    <div className="clip-name">{clip.name}</div>
+                    <div className="clip-meta">
+                      {formatTime(clipDuration(clip))} · {clip.speed}x ·{" "}
+                      {clip.muted ? "muted" : `${Math.round(clip.volume * 100)}%`}
+                    </div>
+                    <div className="clip-edge right" onPointerDown={(e) => startTrim(e, clip, "right")} />
                   </div>
-                  <div className="clip-edge right" onPointerDown={(e) => startTrim(e, clip, "right")} />
-                </div>
+                </Fragment>
               ))}
               {total > 0 && (
                 <div className="playhead" style={{ left: `calc(6px + (100% - 12px) * ${playhead / total})` }} />
@@ -1762,6 +1982,27 @@ export default function App() {
                     onChange={(e) => updateClip(selected.id, { fadeOut: parseFloat(e.target.value) })}
                   />
                 </label>
+                {nextClip && (
+                  <>
+                    <label>
+                      Crossfade to the next clip:{" "}
+                      {nextClip.transitionIn > 0
+                        ? `${transitionDuration(selected, nextClip).toFixed(1)}s`
+                        : "off"}
+                      <input
+                        type="range"
+                        min={0}
+                        max={2}
+                        step={0.1}
+                        value={nextClip.transitionIn || 0}
+                        onChange={(e) => updateClip(nextClip.id, { transitionIn: parseFloat(e.target.value) })}
+                      />
+                    </label>
+                    <p className="hint">
+                      0 is a straight cut. The dissolve never runs longer than the shorter of the two clips.
+                    </p>
+                  </>
+                )}
                 <label>
                   Brightness: {normaliseEffects(selected.effects).brightness}%
                   <input

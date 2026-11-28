@@ -1,0 +1,268 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  CROSSFADE_DEFAULT,
+  CROSSFADE_MAX,
+  canUndo,
+  clearAllTransitionsIn,
+  clampTransitionDuration,
+  clipFadeOpacity,
+  crossfadeAtTime,
+  cutRange,
+  deleteClip,
+  makeClip,
+  makeHistory,
+  moveClip,
+  packClips,
+  pushHistory,
+  setAllTransitionsIn,
+  setTransitionIn,
+  snapshotState,
+  splitClip,
+  totalDuration,
+  transitionDuration,
+  undoHistory,
+} from "../src/timeline.js";
+
+function twoClips() {
+  return [makeClip("a", "a.mp4", null, 10), makeClip("b", "b.mp4", null, 10)];
+}
+
+function threeClips() {
+  return [
+    makeClip("a", "a.mp4", null, 10),
+    makeClip("b", "b.mp4", null, 10),
+    makeClip("c", "c.mp4", null, 10),
+  ];
+}
+
+test("a crossfade never runs longer than the shorter clip", () => {
+  assert.equal(clampTransitionDuration(0.5, 10, 10), 0.5);
+  assert.equal(clampTransitionDuration(5, 10, 10), CROSSFADE_MAX);
+  assert.equal(clampTransitionDuration(1, 0.4, 10), 0.4);
+  assert.equal(clampTransitionDuration(1, 10, 0.3), 0.3);
+  assert.equal(clampTransitionDuration(0, 10, 10), 0);
+  assert.equal(clampTransitionDuration(-1, 10, 10), 0);
+  assert.equal(clampTransitionDuration(NaN, 10, 10), 0);
+  assert.equal(clampTransitionDuration(0.5, 0, 10), 0);
+});
+
+test("the join length comes from the incoming clip and clamps to the clips", () => {
+  const [a, b] = twoClips();
+  assert.equal(transitionDuration(a, b), 0);
+  const faded = setTransitionIn([a, b], "b", 0.5);
+  assert.equal(transitionDuration(faded[0], faded[1]), 0.5);
+  const short = [makeClip("a", "a.mp4", null, 0.4), makeClip("b", "b.mp4", null, 10)];
+  const shortFaded = setTransitionIn(short, "b", 0.5);
+  assert.equal(transitionDuration(shortFaded[0], shortFaded[1]), 0.4);
+  // A clip sped up gets shorter, so the dissolve shortens with it.
+  const sped = [{ ...short[0], speed: 2 }, { ...short[1], speed: 1 }];
+  const spedFaded = setTransitionIn(sped, "b", 0.5);
+  assert.equal(transitionDuration(spedFaded[0], spedFaded[1]), 0.2);
+  // An old clip without the field counts as a straight cut.
+  const { transitionIn, ...oldClip } = b;
+  assert.equal(transitionDuration(a, oldClip), 0);
+});
+
+test("a crossfade window sits centred on the join", () => {
+  const clips = setTransitionIn(twoClips(), "b", 1);
+  const packed = packClips(clips);
+  assert.equal(crossfadeAtTime(packed, 5), null);
+  const start = crossfadeAtTime(packed, 9.5);
+  assert.equal(start.progress, 0);
+  assert.equal(start.left.id, "a");
+  assert.equal(start.right.id, "b");
+  const middle = crossfadeAtTime(packed, 10);
+  assert.equal(middle.progress, 0.5);
+  const end = crossfadeAtTime(packed, 10.49);
+  assert.ok(end.progress > 0.9 && end.progress < 1);
+  assert.equal(crossfadeAtTime(packed, 10.5), null);
+  assert.equal(crossfadeAtTime(packed, 15), null);
+  // No crossfade set means no window anywhere.
+  assert.equal(crossfadeAtTime(packClips(twoClips()), 10), null);
+  // One clip has no join at all.
+  assert.equal(crossfadeAtTime(packClips([makeClip("a", "a.mp4", null, 10)]), 5), null);
+});
+
+test("fade in and out opacity ramps at the ends and holds in the middle", () => {
+  const clip = { ...makeClip("a", "a.mp4", null, 10), start: 0, fadeIn: 2, fadeOut: 2 };
+  assert.equal(clipFadeOpacity(clip, 0), 0);
+  assert.equal(clipFadeOpacity(clip, 1), 0.5);
+  assert.equal(clipFadeOpacity(clip, 2), 1);
+  assert.equal(clipFadeOpacity(clip, 5), 1);
+  assert.equal(clipFadeOpacity(clip, 9), 0.5);
+  assert.equal(clipFadeOpacity(clip, 10), 0);
+  const plain = { ...makeClip("a", "a.mp4", null, 10), start: 0 };
+  assert.equal(clipFadeOpacity(plain, 0), 1);
+  assert.equal(clipFadeOpacity(plain, 9.9), 1);
+});
+
+test("setting and clearing crossfades touches only the join asked for", () => {
+  const clips = threeClips();
+  const one = setTransitionIn(clips, "b", 0.5);
+  assert.deepEqual(
+    one.map((c) => c.transitionIn),
+    [0, 0.5, 0],
+  );
+  const tooLong = setTransitionIn(clips, "c", 5);
+  assert.equal(tooLong[2].transitionIn, CROSSFADE_MAX);
+  const bad = setTransitionIn(clips, "c", NaN);
+  assert.equal(bad[2].transitionIn, 0);
+  const all = setAllTransitionsIn(clips, 1);
+  assert.deepEqual(
+    all.map((c) => c.transitionIn),
+    [0, 1, 1],
+  );
+  const none = clearAllTransitionsIn(all);
+  assert.deepEqual(
+    none.map((c) => c.transitionIn),
+    [0, 0, 0],
+  );
+  // The default is the half second the agent bar uses.
+  assert.equal(CROSSFADE_DEFAULT, 0.5);
+});
+
+test("splitting a clip leaves a straight cut between the halves", () => {
+  const clips = setTransitionIn(threeClips(), "c", 0.5);
+  const out = splitClip(clips, "b", 14);
+  assert.deepEqual(
+    out.map((c) => [c.id, c.transitionIn]),
+    [
+      ["a", 0],
+      ["b", 0],
+      ["b-s1", 0],
+      ["c", 0.5],
+    ],
+  );
+  // Splitting the clip that holds the dissolve keeps the dissolve
+  // on its first half, the new join between the halves is straight.
+  const splitFaded = splitClip(setTransitionIn(twoClips(), "b", 0.5), "b", 14);
+  assert.deepEqual(
+    splitFaded.map((c) => [c.id, c.transitionIn]),
+    [
+      ["a", 0],
+      ["b", 0.5],
+      ["b-s1", 0],
+    ],
+  );
+  assert.equal(totalDuration(out), 30);
+});
+
+test("cutting out a whole clip takes its joins with it", () => {
+  const clips = setTransitionIn(threeClips(), "c", 0.5);
+  const cut = setTransitionIn(clips, "b", 0.5);
+  // The silence range covers all of clip b, so b goes and c now
+  // follows a. Both dissolves are gone.
+  const out = cutRange(cut, 10, 20);
+  assert.deepEqual(
+    out.map((c) => [c.id, c.transitionIn]),
+    [
+      ["a", 0],
+      ["c", 0],
+    ],
+  );
+  // Trimming the end of a clip keeps the dissolve after it.
+  const trimmed = cutRange(setTransitionIn(threeClips(), "c", 0.5), 25, 30);
+  assert.deepEqual(
+    trimmed.map((c) => [c.id, c.transitionIn]),
+    [
+      ["a", 0],
+      ["b", 0],
+      ["c", 0.5],
+    ],
+  );
+  // Splitting a clip with a cut keeps the dissolve after it: the
+  // second half is still the same clip, just cut in two.
+  const split = cutRange(setTransitionIn(threeClips(), "c", 0.5), 13, 15);
+  assert.deepEqual(
+    split.map((c) => [c.id, c.transitionIn]),
+    [
+      ["a", 0],
+      ["b", 0],
+      ["b-s1", 0],
+      ["c", 0.5],
+    ],
+  );
+  assert.equal(totalDuration(split), 28);
+});
+
+test("deleting a clip takes the joins on both sides with it", () => {
+  const clips = setAllTransitionsIn(threeClips(), 0.5);
+  const out = deleteClip(clips, "b");
+  assert.deepEqual(
+    out.map((c) => [c.id, c.transitionIn]),
+    [
+      ["a", 0],
+      ["c", 0],
+    ],
+  );
+  // Deleting the first clip takes the dissolve into the second
+  // with it, the one after that stays.
+  const first = deleteClip(setAllTransitionsIn(threeClips(), 0.5), "a");
+  assert.deepEqual(
+    first.map((c) => [c.id, c.transitionIn]),
+    [
+      ["b", 0],
+      ["c", 0.5],
+    ],
+  );
+  // Deleting the last clip leaves the earlier join alone.
+  const last = deleteClip(setAllTransitionsIn(threeClips(), 0.5), "c");
+  assert.deepEqual(
+    last.map((c) => [c.id, c.transitionIn]),
+    [
+      ["a", 0],
+      ["b", 0.5],
+    ],
+  );
+});
+
+test("reordering clips drops the dissolves that no longer join", () => {
+  const clips = setAllTransitionsIn(threeClips(), 0.5);
+  const moved = moveClip(clips, "c", 0);
+  // Moving c to the front takes the dissolve into c with it, but
+  // a still sits right before b, so that join keeps its dissolve.
+  assert.deepEqual(
+    moved.map((c) => [c.id, c.transitionIn]),
+    [
+      ["c", 0],
+      ["a", 0],
+      ["b", 0.5],
+    ],
+  );
+  const swapped = moveClip(clips, "a", 1);
+  assert.deepEqual(
+    swapped.map((c) => [c.id, c.transitionIn]),
+    [
+      ["b", 0],
+      ["a", 0],
+      ["c", 0],
+    ],
+  );
+});
+
+test("undo and redo cover a crossfade change", () => {
+  const before = {
+    clips: threeClips(),
+    overlays: [],
+    captions: [],
+    audioClips: [],
+    music: null,
+    pips: [],
+  };
+  let history = makeHistory();
+  history = pushHistory(history, snapshotState(before));
+  const after = {
+    ...before,
+    clips: setTransitionIn(before.clips, "b", 0.5),
+  };
+  assert.equal(canUndo(history), true);
+  const undone = undoHistory(history, snapshotState(after));
+  assert.deepEqual(
+    undone.state.clips.map((c) => c.transitionIn),
+    [0, 0, 0],
+  );
+  // The snapshot itself carries the dissolve, so redo brings it back.
+  const snap = snapshotState(after);
+  assert.equal(snap.clips[1].transitionIn, 0.5);
+});

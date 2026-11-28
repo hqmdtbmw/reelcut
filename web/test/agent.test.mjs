@@ -182,6 +182,44 @@ test("colour commands", () => {
   assert.deepEqual(parseCommand("reset the colours on all clips"), { kind: "reset-effects", scope: "all" });
 });
 
+test("crossfades", () => {
+  assert.deepEqual(parseCommand("add a crossfade between clip 1 and 2"), {
+    kind: "add-crossfade",
+    index: 0,
+    rightIndex: 1,
+    seconds: 0.5,
+  });
+  assert.deepEqual(parseCommand("add a crossfade between clip 2 and clip 3"), {
+    kind: "add-crossfade",
+    index: 1,
+    rightIndex: 2,
+    seconds: 0.5,
+  });
+  assert.deepEqual(parseCommand("add a 1 second crossfade between clip 1 and 2"), {
+    kind: "add-crossfade",
+    index: 0,
+    rightIndex: 1,
+    seconds: 1,
+  });
+  assert.deepEqual(parseCommand("add crossfades between all clips"), {
+    kind: "add-crossfade-all",
+    seconds: 0.5,
+  });
+  assert.deepEqual(parseCommand("add a crossfade"), { kind: "add-crossfade", index: -1, seconds: 0.5 });
+  assert.deepEqual(parseCommand("remove the crossfade"), { kind: "remove-crossfade", index: -1 });
+  assert.deepEqual(parseCommand("remove the crossfade between clip 1 and 2"), {
+    kind: "remove-crossfade",
+    index: 0,
+    rightIndex: 1,
+  });
+  assert.deepEqual(parseCommand("remove all crossfades"), { kind: "remove-crossfade-all" });
+});
+
+test("crossfade commands do not read as fades", () => {
+  assert.notEqual(parseCommand("add a crossfade between clip 1 and 2").kind, "fade-all");
+  assert.notEqual(parseCommand("remove the crossfade").kind, "fade-all");
+});
+
 test("unknown commands stay unknown", () => {
   const parsed = parseCommand("do something magical");
   assert.equal(parsed.kind, "unknown");

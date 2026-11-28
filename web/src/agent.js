@@ -21,6 +21,14 @@
 // the selected clip, or "clip 2" when a number is given. A plain
 // "mute it" or "set volume to 50%" still hits every clip.
 //   { kind: "fade-all", seconds }
+//   { kind: "add-crossfade", index, rightIndex, seconds }
+//   { kind: "add-crossfade-all", seconds }
+//   { kind: "remove-crossfade", index, rightIndex }
+//   { kind: "remove-crossfade-all" }
+// "add a crossfade between clip 1 and 2" names the join, a bare
+// "add a crossfade" works on the join after the selected clip, and
+// "add crossfades between all clips" does every join at once.
+// An index of -1 means the selected clip.
 //   { kind: "add-music" }
 //   { kind: "remove-music" }
 //   { kind: "set-music-volume", volume }
@@ -225,6 +233,39 @@ export function parseCommand(rawText, context = {}) {
     return { kind: "set-volume", volume: Math.min(100, parseInt(volume[1], 10)) / 100 };
   }
 
+  // Crossfades: "add a crossfade between clip 1 and 2",
+  // "add crossfades between all clips", "remove the crossfade".
+  // A bare "add a crossfade" works on the join after the selected
+  // clip. An optional length like "a 1 second crossfade" sets the
+  // duration, otherwise it starts at half a second.
+  if (/crossfade/.test(text)) {
+    const lengthMatch = text.match(/(\d+(?:\.\d+)?)\s*(?:second|sec|s)\s*crossfade/);
+    const seconds = lengthMatch ? parseFloat(lengthMatch[1]) : null;
+    if (/all|every/.test(text)) {
+      if (/remov|delete|drop|get rid|take .* out/.test(text)) {
+        return { kind: "remove-crossfade-all" };
+      }
+      if (/add|put/.test(text)) {
+        return { kind: "add-crossfade-all", seconds: seconds ?? 0.5 };
+      }
+    }
+    const between = text.match(/between clip (\d+) and (?:clip )?(\d+)/);
+    if (between) {
+      const left = parseInt(between[1], 10) - 1;
+      const right = parseInt(between[2], 10) - 1;
+      if (/remov|delete|drop|get rid|take .* out/.test(text)) {
+        return { kind: "remove-crossfade", index: left, rightIndex: right };
+      }
+      return { kind: "add-crossfade", index: left, rightIndex: right, seconds: seconds ?? 0.5 };
+    }
+    if (/remov|delete|drop|get rid|take .* out/.test(text)) {
+      return { kind: "remove-crossfade", index: -1 };
+    }
+    if (/add|put/.test(text)) {
+      return { kind: "add-crossfade", index: -1, seconds: seconds ?? 0.5 };
+    }
+  }
+
   const fade = text.match(/add (?:a )?fade(?:s)?(?: of (\d+(?:\.\d+)?) ?(?:s|seconds?)?)?/);
   if (fade) {
     return { kind: "fade-all", seconds: fade[1] ? parseFloat(fade[1]) : 0.5 };
@@ -271,6 +312,7 @@ export const EXAMPLE_COMMANDS = [
   "mute it",
   "mute this clip",
   "set the volume to 50%",
+  "add a crossfade between clip 1 and 2",
   "mute the audio track",
   "make it brighter",
   "add music",

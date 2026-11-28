@@ -18,6 +18,11 @@ export function makeClip(id, name, url, sourceDuration) {
     muted: false,
     fadeIn: 0,
     fadeOut: 0,
+    // Crossfade into this clip from the one before it, in seconds.
+    // 0 means a straight cut. The join only counts when this clip
+    // still sits right after the clip it faded in from, so a delete
+    // or a reorder clears it instead of following the clip.
+    transitionIn: 0,
     effects: { brightness: 100, contrast: 100, saturation: 100 },
   };
 }
@@ -128,6 +133,135 @@ export function adjustClipEffect(clips, id, key, delta) {
   });
 }
 
+// Crossfades. One clip dissolves into the next over the join
+// between them, instead of a straight cut. The dissolve sits on
+// the join itself: half of it runs over the end of the outgoing
+// clip and half over the start of the incoming one, so the total
+// length of the edit does not change. The clips sit back to back
+// with no spare frames, so during the first half the incoming
+// clip holds its first frame while the outgoing one plays, and
+// during the second half the outgoing clip holds its last frame
+// while the incoming one plays. That is the honest limit of a
+// dissolve without handles, and it still reads as a crossfade.
+
+// The length a crossfade starts at when you add one, and the
+// longest one allowed. A crossfade never runs longer than the
+// shorter of the two clips it joins.
+export const CROSSFADE_DEFAULT = 0.5;
+export const CROSSFADE_MAX = 2;
+
+// Clamp a crossfade length to something sane: at least 0, at most
+// 2 seconds, and never longer than the shorter of the two clips.
+// Bad input means no crossfade at all.
+export function clampTransitionDuration(duration, leftDuration, rightDuration) {
+  if (!Number.isFinite(duration) || duration <= 0) return 0;
+  const cap = Math.min(CROSSFADE_MAX, leftDuration, rightDuration);
+  if (!Number.isFinite(cap) || cap <= 0) return 0;
+  return Math.min(duration, cap);
+}
+
+// The crossfade length for the join between two clips, in seconds.
+// 0 when the incoming clip has no crossfade set, or when either
+// clip is too short to hold one. A clip trimmed or sped up after
+// the crossfade was set gets its dissolve shortened here, so the
+// stored value never has to be rewritten.
+export function transitionDuration(left, right) {
+  if (!left || !right) return 0;
+  const stored = Number.isFinite(right.transitionIn) ? right.transitionIn : 0;
+  return clampTransitionDuration(stored, clipDuration(left), clipDuration(right));
+}
+
+// The opacity from a clip's own fade in and out at a point on the
+// timeline. 1 through the middle, ramping at the ends. The clip
+// must be packed, so it carries its start time.
+export function clipFadeOpacity(clip, time) {
+  if (!clip) return 1;
+  let opacity = 1;
+  const len = clipDuration(clip);
+  if (clip.fadeIn > 0 && time - clip.start < clip.fadeIn) {
+    opacity = Math.max(0, (time - clip.start) / clip.fadeIn);
+  }
+  if (clip.fadeOut > 0 && clip.start + len - time < clip.fadeOut) {
+    opacity = Math.min(opacity, Math.max(0, (clip.start + len - time) / clip.fadeOut));
+  }
+  return opacity;
+}
+
+// The crossfade covering a point on the timeline, if there is one.
+// Returns the two clips, how far through the dissolve that point
+// is (0 at the start of the window, 1 at the end), the dissolve
+// length and the join time. The window is centred on the join, so
+// progress 0.5 is exactly the cut point.
+export function crossfadeAtTime(packed, time) {
+  for (let i = 1; i < packed.length; i += 1) {
+    const left = packed[i - 1];
+    const right = packed[i];
+    const d = transitionDuration(left, right);
+    if (d <= 0) continue;
+    const join = right.start;
+    const start = join - d / 2;
+    const end = join + d / 2;
+    if (time >= start && time < end) {
+      return { left, right, progress: (time - start) / d, duration: d, join };
+    }
+  }
+  return null;
+}
+
+// Set the crossfade into one clip from the one before it. The
+// stored length is clamped to the 0 to 2 second range, the shorter
+// clip clamp happens when the join is used, so a later trim or
+// speed change still shortens it.
+export function setTransitionIn(clips, id, duration) {
+  const next = Number.isFinite(duration) ? Math.min(CROSSFADE_MAX, Math.max(0, duration)) : 0;
+  return clips.map((c) => (c.id === id ? { ...c, transitionIn: next } : c));
+}
+
+// Put the same crossfade on every join: every clip but the first
+// fades in from the one before it.
+export function setAllTransitionsIn(clips, duration) {
+  const next = Number.isFinite(duration) ? Math.min(CROSSFADE_MAX, Math.max(0, duration)) : 0;
+  return clips.map((c, i) => (i === 0 ? { ...c, transitionIn: 0 } : { ...c, transitionIn: next }));
+}
+
+// Take every crossfade out, back to straight cuts.
+export function clearAllTransitionsIn(clips) {
+  return clips.map((c) => ({ ...c, transitionIn: 0 }));
+}
+
+// The base id of a clip, with any split suffix stripped, so a
+// piece of a clip still counts as that clip. "clip-1-s2" and
+// "clip-1-b" both sit on "clip-1".
+function baseOf(id) {
+  return String(id).replace(/(-b|-s\d+)+$/, "");
+}
+
+// Keep a crossfade only while the clip it fades in from is still
+// the clip on its left. A delete, a cut or a reorder gives a clip
+// a new neighbour, and the old dissolve belongs to the old join,
+// so it goes away instead of following the clip. A split piece
+// still counts as the clip it was cut from, so splitting the clip
+// before a crossfade keeps the dissolve on the join. Clips that
+// never had a crossfade are left alone.
+export function pruneTransitions(oldClips, newClips) {
+  const oldPacked = packClips(oldClips);
+  const newPacked = packClips(newClips);
+  const oldLeft = new Map();
+  oldPacked.forEach((c, i) => oldLeft.set(c.id, i > 0 ? oldPacked[i - 1].id : null));
+  return newPacked.map((c, i) => {
+    const out = stripStart(c);
+    if (!c.transitionIn) return out;
+    const prevId = i > 0 ? newPacked[i - 1].id : null;
+    const was = oldLeft.has(c.id) ? oldLeft.get(c.id) : undefined;
+    const same =
+      (was === null && prevId === null) ||
+      (was != null &&
+        prevId != null &&
+        (prevId === was || baseOf(prevId) === baseOf(was)));
+    return same ? out : { ...out, transitionIn: 0 };
+  });
+}
+
 export function clipDuration(clip) {
   const len = Math.max(0, clip.sourceOut - clip.sourceIn);
   return clip.speed > 0 ? len / clip.speed : len;
@@ -226,6 +360,10 @@ export function splitClip(clips, id, at) {
     sourceIn: cutSource,
     sourceOut: clip.sourceOut,
     fadeIn: 0,
+    // The join between the two halves is a straight cut. The
+    // dissolve into the next clip stays on the second half, since
+    // it is the piece that still touches that clip.
+    transitionIn: 0,
   };
   const out = [...packed];
   out[idx] = first;
@@ -234,7 +372,9 @@ export function splitClip(clips, id, at) {
 }
 
 export function deleteClip(clips, id) {
-  return clips.filter((c) => c.id !== id);
+  // Deleting a clip gives the clip after it a new neighbour, so
+  // the dissolve that joined it to the deleted clip goes away.
+  return pruneTransitions(clips, clips.filter((c) => c.id !== id));
 }
 
 export function moveClip(clips, id, newIndex) {
@@ -243,7 +383,9 @@ export function moveClip(clips, id, newIndex) {
   const out = [...clips];
   const [clip] = out.splice(idx, 1);
   out.splice(newIndex, 0, clip);
-  return out;
+  // Reordering gives clips new neighbours, so a dissolve that
+  // joined two clips that no longer sit together goes away.
+  return pruneTransitions(clips, out);
 }
 
 // Cut a time range out of the edit. Clips overlapping the range are
@@ -278,9 +420,15 @@ export function cutRange(clips, start, end) {
     out.push(stripStart({ ...clip, sourceOut: cutIn }));
     const secondId = splitSecondId(clip.id, used);
     used.add(secondId);
-    out.push(stripStart({ ...clip, id: secondId, sourceIn: cutOut }));
+    // The join between the two halves is a straight cut, the
+    // same as a split. The dissolve into the next clip stays on
+    // the second half, since it still touches that clip.
+    out.push(stripStart({ ...clip, id: secondId, sourceIn: cutOut, transitionIn: 0 }));
   }
-  return out;
+  // A cut can drop a whole clip, so the clip after it gets a new
+  // neighbour and the dissolve that joined it to the dropped clip
+  // goes away.
+  return pruneTransitions(clips, out);
 }
 
 // Keep only the first target seconds of the edit. Clips past the
