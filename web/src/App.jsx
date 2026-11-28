@@ -675,8 +675,15 @@ export default function App() {
   function deleteSelected() {
     if (!selected) return;
     recordHistory();
+    const range = [{ start: selected.start, end: selected.start + clipDuration(selected) }];
     setClips(deleteClip(clips, selected.id));
-    setPips((prev) => shiftPips(prev, [{ start: selected.start, end: selected.start + clipDuration(selected) }], clips));
+    // Deleting a clip closes the timeline up, so the captions, the
+    // text overlays, the audio track and the overlays shift with it,
+    // the same as they do for the other cuts.
+    setCaptions((prev) => shiftTimedItems(prev, range));
+    setOverlays((prev) => shiftTimedItems(prev, range));
+    setAudioClips((prev) => shiftAudioClips(prev, range, clips));
+    setPips((prev) => shiftPips(prev, range, clips));
     setSelectedId(null);
     setAgentSay(`Deleted ${selected.name}.`);
   }
@@ -972,10 +979,15 @@ export default function App() {
         const clip = packed[parsed.index];
         if (!clip) return setAgentSay(`There is no clip ${parsed.index + 1}. You have ${packed.length}.`);
         recordHistory();
+        const range = [{ start: clip.start, end: clip.start + clipDuration(clip) }];
         setClips(deleteClip(clips, clip.id));
-        // Deleting a clip closes the timeline up, so the overlays
-        // shift with it, the same as they do for the other cuts.
-        setPips((prev) => shiftPips(prev, [{ start: clip.start, end: clip.start + clipDuration(clip) }], clips));
+        // Deleting a clip closes the timeline up, so the captions,
+        // the text overlays, the audio track and the overlays shift
+        // with it, the same as they do for the other cuts.
+        setCaptions((prev) => shiftTimedItems(prev, range));
+        setOverlays((prev) => shiftTimedItems(prev, range));
+        setAudioClips((prev) => shiftAudioClips(prev, range, clips));
+        setPips((prev) => shiftPips(prev, range, clips));
         setAgentSay(`Deleted clip ${parsed.index + 1}, ${clip.name}.`);
         return;
       }

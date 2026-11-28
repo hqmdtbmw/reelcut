@@ -60,7 +60,7 @@ import {
   trimClip,
   undoHistory,
 } from "../src/timeline.js";
-import { makePipClip } from "../src/pip.js";
+import { makePipClip, shiftPips } from "../src/pip.js";
 
 function twoClips() {
   return [
@@ -150,6 +150,89 @@ test("delete closes the gap", () => {
   const out = deleteClip(twoClips(), "a");
   assert.equal(out.length, 1);
   assert.equal(totalDuration(out), 6);
+});
+
+// Deleting a clip moves everything else with it: the captions, the
+// text overlays, the audio track and the picture in picture overlays
+// all shift by the deleted clip, the same way they do for a cut.
+// Items inside the deleted clip go away, ones straddling it get
+// shorter and resume from the right spot in their file, and the
+// rest move earlier. This is the shift the two delete paths in the
+// app run over the deleted clip's time range.
+test("deleting a clip moves the captions, text, audio and overlays with it", () => {
+  const clips = twoClips();
+  const deleted = packClips(clips)[0];
+  const range = [{ start: deleted.start, end: deleted.start + clipDuration(deleted) }];
+  assert.equal(totalDuration(deleteClip(clips, "a")), 6);
+
+  const captions = [
+    { text: "gone", start: 2, end: 4 },
+    { text: "straddler", start: 8, end: 12 },
+    { text: "late", start: 11, end: 13 },
+  ];
+  assert.deepEqual(shiftTimedItems(captions, range), [
+    { text: "straddler", start: 0, end: 2 },
+    { text: "late", start: 1, end: 3 },
+  ]);
+
+  const overlays = [
+    { text: "gone", start: 3, end: 5 },
+    { text: "late", start: 12, end: 14 },
+  ];
+  assert.deepEqual(shiftTimedItems(overlays, range), [{ text: "late", start: 2, end: 4 }]);
+
+  const audio = [
+    makeAudioClip("voice", "voice.mp3", null, 11, 3),
+    makeAudioClip("gone", "gone.mp3", null, 2, 2),
+    makeAudioClip("straddler", "talk.mp3", null, 8, 4),
+  ];
+  const movedAudio = shiftAudioClips(audio, range, clips);
+  assert.deepEqual(
+    movedAudio.map((c) => [c.id, c.start, c.duration, c.sourceIn]),
+    [
+      ["voice", 1, 3, 0],
+      ["straddler-s1", 0, 2, 2],
+    ],
+  );
+
+  const pips = [
+    makePipClip("pip-1", "pip.mp4", null, 11, 2, "bottom-right", "medium", 2),
+    makePipClip("pip-2", "pip.mp4", null, 2, 2, "bottom-right", "medium", 2),
+    makePipClip("pip-3", "pip.mp4", null, 8, 4, "bottom-right", "medium", 4),
+  ];
+  const movedPips = shiftPips(pips, range, clips);
+  assert.deepEqual(
+    movedPips.map((c) => [c.id, c.start, c.duration, c.sourceIn]),
+    [
+      ["pip-1", 1, 2, 0],
+      ["pip-3-s1", 0, 2, 2],
+    ],
+  );
+});
+
+// Deleting the last clip leaves everything before it alone: the
+// shift only moves items after the deleted range.
+test("deleting the last clip leaves earlier items where they are", () => {
+  const clips = twoClips();
+  const deleted = packClips(clips)[1];
+  const range = [{ start: deleted.start, end: deleted.start + clipDuration(deleted) }];
+  assert.equal(totalDuration(deleteClip(clips, "b")), 10);
+  assert.deepEqual(shiftTimedItems([{ text: "early", start: 2, end: 4 }], range), [
+    { text: "early", start: 2, end: 4 },
+  ]);
+  assert.deepEqual(
+    shiftAudioClips([makeAudioClip("voice", "voice.mp3", null, 2, 3)], range, clips).map((c) => [
+      c.start,
+      c.duration,
+    ]),
+    [[2, 3]],
+  );
+  assert.deepEqual(
+    shiftPips([makePipClip("pip-1", "pip.mp4", null, 2, 3, "bottom-right", "medium", 3)], range, clips).map(
+      (c) => [c.start, c.duration],
+    ),
+    [[2, 3]],
+  );
 });
 
 test("move reorders", () => {
