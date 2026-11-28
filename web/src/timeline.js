@@ -176,6 +176,41 @@ export function splitSecondId(id, usedIds) {
   return `${base}-s${n}`;
 }
 
+// Keep the selection pointing at a real clip after a split or a
+// cut. Splitting a selected clip gives the second half a new id,
+// and a cut can drop the first half or the whole clip, so the old
+// id can point at nothing and the panel goes blank. This follows
+// the pieces the selected clip became: if only one survives, that
+// one is the selection; if both survive, the one under the given
+// time wins, which is the second half when the cut sits exactly
+// on the playhead; if none survive, the selection clears. A clip
+// the edit did not touch keeps its id, and no selection stays no
+// selection. Pieces are found by id: the old id, or a new id off
+// the same base, since a split numbers the second half off the
+// base id. Timed items (audio clips, overlays) carry their own
+// start and duration, video clips are packed back to back to find
+// where each piece sits.
+export function followSelection(oldItems, newItems, selectedId, atTime) {
+  if (selectedId == null) return null;
+  if (!oldItems.some((c) => c.id === selectedId)) return selectedId;
+  const oldIds = new Set(oldItems.map((c) => c.id));
+  const base = String(selectedId).replace(/(-b|-s\d+)+$/, "");
+  const isPiece = (c) =>
+    c.id === selectedId ||
+    (!oldIds.has(c.id) && String(c.id).replace(/(-b|-s\d+)+$/, "") === base);
+  const pieces = newItems.filter(isPiece);
+  if (!pieces.length) return null;
+  if (pieces.length === 1) return pieces[0].id;
+  const timed =
+    pieces[0] && typeof pieces[0].start === "number" && typeof pieces[0].duration === "number"
+      ? pieces.map((c) => ({ id: c.id, start: c.start, end: c.start + c.duration }))
+      : packClips(newItems)
+          .filter(isPiece)
+          .map((c) => ({ id: c.id, start: c.start, end: c.start + clipDuration(c) }));
+  const under = timed.find((c) => atTime >= c.start && atTime < c.end);
+  return under ? under.id : timed[0].id;
+}
+
 export function splitClip(clips, id, at) {
   const packed = packClips(clips);
   const idx = packed.findIndex((c) => c.id === id);

@@ -29,6 +29,7 @@ import {
   captionsFromWords,
   effectiveVolume,
   formatTime,
+  followSelection,
   makeAudioClip,
   makeClip,
   makeHistory,
@@ -60,7 +61,7 @@ import {
   trimClip,
   undoHistory,
 } from "../src/timeline.js";
-import { makePipClip, shiftPips } from "../src/pip.js";
+import { makePipClip, shiftPips, splitPips } from "../src/pip.js";
 
 function twoClips() {
   return [
@@ -1317,4 +1318,96 @@ test("the file offset wraps from the source offset when the clip loops", () => {
   assert.equal(audioFileOffset(voice, [], 2, 10), 8);
   assert.equal(audioFileOffset(voice, [], 4, 10), 0);
   assert.equal(audioFileOffset(voice, [], 7, 10), 3);
+});
+
+// The selection used to point at the old id after a cut split a
+// clip, so the panel went blank when only the right hand piece
+// survived. These tests pin the follow rule: the piece under the
+// playhead wins when both survive, the only survivor wins when
+// one does, and the selection clears when the clip is gone.
+test("splitting the selected clip moves the selection to the half under the playhead", () => {
+  const out = splitClip(twoClips(), "a", 4);
+  assert.equal(followSelection(twoClips(), out, "a", 4), "a-s1");
+});
+
+test("splitting the selected clip keeps the first half when the playhead is in it", () => {
+  const out = splitClip(twoClips(), "a", 4);
+  assert.equal(followSelection(twoClips(), out, "a", 2), "a");
+});
+
+test("splitting another clip leaves the selection alone", () => {
+  const out = splitClip(twoClips(), "b", 12);
+  assert.equal(followSelection(twoClips(), out, "a", 12), "a");
+});
+
+test("a cut that removes the selected clip clears the selection", () => {
+  const out = cutRange(twoClips(), 0, 10);
+  assert.equal(followSelection(twoClips(), out, "a", 0), null);
+});
+
+test("a cut that leaves the selected clip alone keeps the selection", () => {
+  const out = cutRange(twoClips(), 12, 14);
+  assert.equal(followSelection(twoClips(), out, "a", 2), "a");
+});
+
+test("a cut that splits the selected clip keeps the piece under the playhead", () => {
+  const out = cutRange(twoClips(), 4, 6);
+  assert.equal(followSelection(twoClips(), out, "a", 5), "a-s1");
+  assert.equal(followSelection(twoClips(), out, "a", 2), "a");
+});
+
+test("splitting the selected audio clip moves the selection to the half under the playhead", () => {
+  const clip = makeAudioClip("voice", "voice.mp3", null, 0, 10);
+  const out = splitAudioClips([clip], 4);
+  assert.equal(followSelection([clip], out, "voice", 4), "voice-s1");
+});
+
+test("a cut that leaves only the right half of an audio clip moves the selection to it", () => {
+  const clip = makeAudioClip("voice", "voice.mp3", null, 5, 5);
+  const out = shiftAudioClips([clip], [{ start: 2, end: 7 }]);
+  assert.deepEqual(
+    out.map((c) => c.id),
+    ["voice-s1"],
+  );
+  assert.equal(followSelection([clip], out, "voice", 8), "voice-s1");
+});
+
+test("a cut that removes the selected audio clip clears the selection", () => {
+  const clip = makeAudioClip("voice", "voice.mp3", null, 3, 1);
+  const out = shiftAudioClips([clip], [{ start: 2, end: 4 }]);
+  assert.deepEqual(out, []);
+  assert.equal(followSelection([clip], out, "voice", 3), null);
+});
+
+test("splitting the selected overlay moves the selection to the half under the playhead", () => {
+  const clip = makePipClip("pip-1", "facecam.mp4", null, 2, 6, "bottom-right", "medium", 10);
+  const out = splitPips([clip], 4);
+  assert.equal(followSelection([clip], out, "pip-1", 4), "pip-1-s1");
+});
+
+test("a cut that leaves only the right half of an overlay moves the selection to it", () => {
+  const clip = makePipClip("pip-1", "facecam.mp4", null, 5, 4, "bottom-right", "medium", 10);
+  const out = shiftPips([clip], [{ start: 4, end: 7 }]);
+  assert.deepEqual(
+    out.map((c) => c.id),
+    ["pip-1-s1"],
+  );
+  assert.equal(followSelection([clip], out, "pip-1", 8), "pip-1-s1");
+});
+
+test("a cut that removes the selected overlay clears the selection", () => {
+  const clip = makePipClip("pip-1", "facecam.mp4", null, 5, 2, "bottom-right", "medium", 10);
+  const out = shiftPips([clip], [{ start: 4, end: 8 }]);
+  assert.deepEqual(out, []);
+  assert.equal(followSelection([clip], out, "pip-1", 5), null);
+});
+
+test("no selection stays no selection", () => {
+  const out = splitClip(twoClips(), "a", 4);
+  assert.equal(followSelection(twoClips(), out, null, 4), null);
+});
+
+test("an unknown selection is left alone", () => {
+  const out = splitClip(twoClips(), "a", 4);
+  assert.equal(followSelection(twoClips(), out, "missing", 4), "missing");
 });

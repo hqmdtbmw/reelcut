@@ -18,6 +18,7 @@ import {
   deleteClip,
   detectSilence,
   effectiveVolume,
+  followSelection,
   formatTime,
   makeAudioClip,
   makeClip,
@@ -662,13 +663,20 @@ export default function App() {
     }
     recordHistory();
     setClips(out);
+    setSelectedId(followSelection(clips, out, selectedId, playhead));
     // The audio track splits at the same point, so a voiceover
     // straddling the cut becomes two clips and the second half
     // picks up where the words left off. The overlays split too,
     // so one sitting across the cut becomes two and the second
-    // half picks up partway through its own video.
-    setAudioClips((prev) => splitAudioClips(prev, playhead, clips));
-    setPips((prev) => splitPips(prev, playhead, clips));
+    // half picks up partway through its own video. The selection
+    // follows the piece under the playhead on each track, so the
+    // panel never goes blank on a clip that just got split.
+    const nextAudio = splitAudioClips(audioClipsRef.current, playhead, clips);
+    setAudioClips(nextAudio);
+    setSelectedAudioId(followSelection(audioClipsRef.current, nextAudio, selectedAudioId, playhead));
+    const nextPips = splitPips(pipsRef.current, playhead, clips);
+    setPips(nextPips);
+    setSelectedPipId(followSelection(pipsRef.current, nextPips, selectedPipId, playhead));
     setAgentSay(`Split ${currentClip.name} at ${formatTime(playhead)}.`);
   }
 
@@ -679,11 +687,17 @@ export default function App() {
     setClips(deleteClip(clips, selected.id));
     // Deleting a clip closes the timeline up, so the captions, the
     // text overlays, the audio track and the overlays shift with it,
-    // the same as they do for the other cuts.
+    // the same as they do for the other cuts. An audio clip or an
+    // overlay that only survives as its right hand piece keeps the
+    // selection on that piece, and one that is gone clears it.
     setCaptions((prev) => shiftTimedItems(prev, range));
     setOverlays((prev) => shiftTimedItems(prev, range));
-    setAudioClips((prev) => shiftAudioClips(prev, range, clips));
-    setPips((prev) => shiftPips(prev, range, clips));
+    const nextAudio = shiftAudioClips(audioClipsRef.current, range, clips);
+    setAudioClips(nextAudio);
+    setSelectedAudioId(followSelection(audioClipsRef.current, nextAudio, selectedAudioId, playhead));
+    const nextPips = shiftPips(pipsRef.current, range, clips);
+    setPips(nextPips);
+    setSelectedPipId(followSelection(pipsRef.current, nextPips, selectedPipId, playhead));
     setSelectedId(null);
     setAgentSay(`Deleted ${selected.name}.`);
   }
@@ -782,10 +796,17 @@ export default function App() {
       for (const r of sorted) next = cutRange(next, r.start, r.end);
       recordHistory();
       setClips(next);
+      setSelectedId(followSelection(clips, next, selectedId, playheadRef.current));
       // The audio track moves with the cuts, the same as the captions
       // and text do, so a voiceover stays lined up with the video.
-      setAudioClips((prev) => shiftAudioClips(prev, allRanges, clips));
-      setPips((prev) => shiftPips(prev, allRanges, clips));
+      // The selection follows the surviving piece on each track, so
+      // the panel never goes blank on a clip a cut just split.
+      const nextAudio = shiftAudioClips(audioClipsRef.current, allRanges, clips);
+      setAudioClips(nextAudio);
+      setSelectedAudioId(followSelection(audioClipsRef.current, nextAudio, selectedAudioId, playheadRef.current));
+      const nextPips = shiftPips(pipsRef.current, allRanges, clips);
+      setPips(nextPips);
+      setSelectedPipId(followSelection(pipsRef.current, nextPips, selectedPipId, playheadRef.current));
       seek(0);
       const audioNote = audioClipsRef.current.length ? " The audio track moved with the cuts." : "";
       const pipNote = pipsRef.current.length ? " The overlays moved with the cuts." : "";
@@ -822,10 +843,15 @@ export default function App() {
     for (const r of sorted) next = cutRange(next, r.start, r.end);
     recordHistory();
     setClips(next);
+    setSelectedId(followSelection(clips, next, selectedId, playheadRef.current));
     setCaptions((prev) => shiftTimedItems(prev, ranges));
     setOverlays((prev) => shiftTimedItems(prev, ranges));
-    setAudioClips((prev) => shiftAudioClips(prev, ranges, clips));
-    setPips((prev) => shiftPips(prev, ranges, clips));
+    const nextAudio = shiftAudioClips(audioClipsRef.current, ranges, clips);
+    setAudioClips(nextAudio);
+    setSelectedAudioId(followSelection(audioClipsRef.current, nextAudio, selectedAudioId, playheadRef.current));
+    const nextPips = shiftPips(pipsRef.current, ranges, clips);
+    setPips(nextPips);
+    setSelectedPipId(followSelection(pipsRef.current, nextPips, selectedPipId, playheadRef.current));
     seek(0);
     const audioNote = audioClipsRef.current.length ? " The audio track moved with the cuts." : "";
     const pipNote = pipsRef.current.length ? " The overlays moved with the cuts." : "";
@@ -913,9 +939,15 @@ export default function App() {
         if (!clips.length) return setAgentSay("Import a video first.");
         const seconds = Math.min(parsed.seconds, total);
         recordHistory();
-        setClips(cutRange(clips, 0, seconds));
-        setAudioClips((prev) => shiftAudioClips(prev, [{ start: 0, end: seconds }], clips));
-        setPips((prev) => shiftPips(prev, [{ start: 0, end: seconds }], clips));
+        const next = cutRange(clips, 0, seconds);
+        setClips(next);
+        setSelectedId(followSelection(clips, next, selectedId, playhead));
+        const nextAudio = shiftAudioClips(audioClipsRef.current, [{ start: 0, end: seconds }], clips);
+        setAudioClips(nextAudio);
+        setSelectedAudioId(followSelection(audioClipsRef.current, nextAudio, selectedAudioId, playhead));
+        const nextPips = shiftPips(pipsRef.current, [{ start: 0, end: seconds }], clips);
+        setPips(nextPips);
+        setSelectedPipId(followSelection(pipsRef.current, nextPips, selectedPipId, playhead));
         seek(0);
         setAgentSay(`Cut the first ${seconds} seconds.`);
         return;
@@ -927,9 +959,15 @@ export default function App() {
           return;
         }
         recordHistory();
-        setClips(cutdown(clips, parsed.seconds));
-        setAudioClips((prev) => cutdownAudioClips(prev, parsed.seconds));
-        setPips((prev) => cutdownPips(prev, parsed.seconds));
+        const next = cutdown(clips, parsed.seconds);
+        setClips(next);
+        setSelectedId(followSelection(clips, next, selectedId, playhead));
+        const nextAudio = cutdownAudioClips(audioClipsRef.current, parsed.seconds);
+        setAudioClips(nextAudio);
+        setSelectedAudioId(followSelection(audioClipsRef.current, nextAudio, selectedAudioId, playhead));
+        const nextPips = cutdownPips(pipsRef.current, parsed.seconds);
+        setPips(nextPips);
+        setSelectedPipId(followSelection(pipsRef.current, nextPips, selectedPipId, playhead));
         setOverlays((prev) =>
           prev
             .filter((o) => o.start < parsed.seconds)
@@ -970,8 +1008,13 @@ export default function App() {
         if (!out) return setAgentSay("I could not split there.");
         recordHistory();
         setClips(out);
-        setAudioClips((prev) => splitAudioClips(prev, parsed.seconds, clips));
-        setPips((prev) => splitPips(prev, parsed.seconds, clips));
+        setSelectedId(followSelection(clips, out, selectedId, parsed.seconds));
+        const nextAudio = splitAudioClips(audioClipsRef.current, parsed.seconds, clips);
+        setAudioClips(nextAudio);
+        setSelectedAudioId(followSelection(audioClipsRef.current, nextAudio, selectedAudioId, parsed.seconds));
+        const nextPips = splitPips(pipsRef.current, parsed.seconds, clips);
+        setPips(nextPips);
+        setSelectedPipId(followSelection(pipsRef.current, nextPips, selectedPipId, parsed.seconds));
         setAgentSay(`Split ${clip.name} at ${formatTime(parsed.seconds)}.`);
         return;
       }
@@ -980,14 +1023,22 @@ export default function App() {
         if (!clip) return setAgentSay(`There is no clip ${parsed.index + 1}. You have ${packed.length}.`);
         recordHistory();
         const range = [{ start: clip.start, end: clip.start + clipDuration(clip) }];
-        setClips(deleteClip(clips, clip.id));
+        const next = deleteClip(clips, clip.id);
+        setClips(next);
+        // Deleting a clip used to leave the selection pointing at
+        // the clip that just went away, so the panel went blank.
+        setSelectedId(followSelection(clips, next, selectedId, playhead));
         // Deleting a clip closes the timeline up, so the captions,
         // the text overlays, the audio track and the overlays shift
         // with it, the same as they do for the other cuts.
         setCaptions((prev) => shiftTimedItems(prev, range));
         setOverlays((prev) => shiftTimedItems(prev, range));
-        setAudioClips((prev) => shiftAudioClips(prev, range, clips));
-        setPips((prev) => shiftPips(prev, range, clips));
+        const nextAudio = shiftAudioClips(audioClipsRef.current, range, clips);
+        setAudioClips(nextAudio);
+        setSelectedAudioId(followSelection(audioClipsRef.current, nextAudio, selectedAudioId, playhead));
+        const nextPips = shiftPips(pipsRef.current, range, clips);
+        setPips(nextPips);
+        setSelectedPipId(followSelection(pipsRef.current, nextPips, selectedPipId, playhead));
         setAgentSay(`Deleted clip ${parsed.index + 1}, ${clip.name}.`);
         return;
       }
