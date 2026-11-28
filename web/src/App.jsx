@@ -521,6 +521,13 @@ export default function App() {
       setPips((prev) => respeedPips(prev, oldClips, next));
       return;
     }
+    if (patch.transitionIn !== undefined) {
+      // The crossfade slider writes through here. Clamping on
+      // write keeps the stored length inside what the two clips
+      // allow, so the slider, its label and the stored value agree.
+      setClips((prev) => setTransitionIn(prev, id, patch.transitionIn));
+      return;
+    }
     setClips((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
   }
 
@@ -1986,7 +1993,7 @@ export default function App() {
                   <>
                     <label>
                       Crossfade to the next clip:{" "}
-                      {nextClip.transitionIn > 0
+                      {transitionDuration(selected, nextClip) > 0
                         ? `${transitionDuration(selected, nextClip).toFixed(1)}s`
                         : "off"}
                       <input
@@ -1994,7 +2001,7 @@ export default function App() {
                         min={0}
                         max={2}
                         step={0.1}
-                        value={nextClip.transitionIn || 0}
+                        value={transitionDuration(selected, nextClip)}
                         onChange={(e) => updateClip(nextClip.id, { transitionIn: parseFloat(e.target.value) })}
                       />
                     </label>

@@ -21,6 +21,7 @@ import {
   splitClip,
   totalDuration,
   transitionDuration,
+  trimClip,
   undoHistory,
 } from "../src/timeline.js";
 
@@ -120,6 +121,44 @@ test("setting and clearing crossfades touches only the join asked for", () => {
   );
   // The default is the half second the agent bar uses.
   assert.equal(CROSSFADE_DEFAULT, 0.5);
+});
+
+test("writing a crossfade stores only what the two clips allow", () => {
+  const short = [makeClip("a", "a.mp4", null, 0.4), makeClip("b", "b.mp4", null, 10)];
+  const stored = setTransitionIn(short, "b", 1);
+  assert.equal(stored[1].transitionIn, 0.4);
+  // The slider value and the label both come from the join length,
+  // so they match the stored value.
+  assert.equal(transitionDuration(stored[0], stored[1]), stored[1].transitionIn);
+  // A sped up clip is shorter, so the same write stores less.
+  const sped = [{ ...short[0], speed: 2 }, short[1]];
+  assert.equal(setTransitionIn(sped, "b", 0.5)[1].transitionIn, 0.2);
+  // Writing again after a trim stores the new shorter length, so
+  // the slider and the stored value agree after the trim too.
+  const trimmed = trimClip(setTransitionIn(twoClips(), "b", 1.5), "a", 0, 0.4);
+  const rewritten = setTransitionIn(trimmed, "b", 1.5);
+  assert.equal(rewritten[1].transitionIn, 0.4);
+  assert.equal(transitionDuration(rewritten[0], rewritten[1]), rewritten[1].transitionIn);
+  // A clip with no clip before it has no join, so it only gets
+  // the 0 to 2 second clamp.
+  assert.equal(setTransitionIn(twoClips(), "a", 5)[0].transitionIn, CROSSFADE_MAX);
+  assert.equal(setTransitionIn(twoClips(), "a", NaN)[0].transitionIn, 0);
+});
+
+test("crossfades on every join store only what each join allows", () => {
+  const clips = [
+    makeClip("a", "a.mp4", null, 10),
+    makeClip("b", "b.mp4", null, 0.4),
+    makeClip("c", "c.mp4", null, 10),
+  ];
+  const all = setAllTransitionsIn(clips, 1);
+  // Both joins touch the short middle clip, so both store 0.4.
+  assert.deepEqual(
+    all.map((c) => c.transitionIn),
+    [0, 0.4, 0.4],
+  );
+  assert.equal(transitionDuration(all[0], all[1]), 0.4);
+  assert.equal(transitionDuration(all[1], all[2]), 0.4);
 });
 
 test("splitting a clip leaves a straight cut between the halves", () => {

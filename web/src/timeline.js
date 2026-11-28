@@ -209,19 +209,34 @@ export function crossfadeAtTime(packed, time) {
 }
 
 // Set the crossfade into one clip from the one before it. The
-// stored length is clamped to the 0 to 2 second range, the shorter
-// clip clamp happens when the join is used, so a later trim or
-// speed change still shortens it.
+// stored length is clamped to what the two clips allow right now:
+// at most 2 seconds, and never longer than the shorter of the two
+// clips on the join. A later trim or speed change still shortens
+// the dissolve when the join is used, so the stored value is a
+// ceiling, not a promise. A clip with no clip before it has no
+// join, so it only gets the 0 to 2 second clamp.
 export function setTransitionIn(clips, id, duration) {
-  const next = Number.isFinite(duration) ? Math.min(CROSSFADE_MAX, Math.max(0, duration)) : 0;
+  const idx = clips.findIndex((c) => c.id === id);
+  if (idx === -1) return clips;
+  const left = idx > 0 ? clips[idx - 1] : null;
+  const right = clips[idx];
+  const next = left
+    ? clampTransitionDuration(duration, clipDuration(left), clipDuration(right))
+    : Number.isFinite(duration)
+      ? Math.min(CROSSFADE_MAX, Math.max(0, duration))
+      : 0;
   return clips.map((c) => (c.id === id ? { ...c, transitionIn: next } : c));
 }
 
 // Put the same crossfade on every join: every clip but the first
-// fades in from the one before it.
+// fades in from the one before it. Each join stores only what its
+// own two clips allow, so a short clip gets a short dissolve.
 export function setAllTransitionsIn(clips, duration) {
-  const next = Number.isFinite(duration) ? Math.min(CROSSFADE_MAX, Math.max(0, duration)) : 0;
-  return clips.map((c, i) => (i === 0 ? { ...c, transitionIn: 0 } : { ...c, transitionIn: next }));
+  return clips.map((c, i) => {
+    if (i === 0) return { ...c, transitionIn: 0 };
+    const next = clampTransitionDuration(duration, clipDuration(clips[i - 1]), clipDuration(c));
+    return { ...c, transitionIn: next };
+  });
 }
 
 // Take every crossfade out, back to straight cuts.
