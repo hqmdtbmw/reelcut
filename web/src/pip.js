@@ -260,6 +260,63 @@ export function cutdownPips(list, seconds) {
     .map((c) => (c.start + c.duration > seconds ? { ...c, duration: seconds - c.start } : c));
 }
 
+// Split ids stay short no matter how many times an overlay is
+// cut. The first half keeps the overlay id, the second half gets
+// the base id plus a split number, so splitting a split overlay
+// gives "pip-1-s2" instead of "pip-1-b-b". The number is the lowest
+// one not already used on the track, so ids stay unique even when
+// an overlay is split again and again. Old ids ending in "-b"
+// count as split ids too, so an overlay saved by the old scheme
+// gets a clean number the next time it is cut. Mirrors
+// splitSecondId in timeline.js, kept here so this file stands on
+// its own.
+function splitSecondId(id, usedIds) {
+  const base = String(id).replace(/(-b|-s\d+)+$/, "");
+  let n = 1;
+  while (usedIds.has(`${base}-s${n}`)) n += 1;
+  return `${base}-s${n}`;
+}
+
+// Split overlays at a point on the timeline, the same way a video
+// split cuts a clip in two. An overlay straddling the split point
+// becomes two overlays: the first keeps its start and source
+// offset, the second starts at the split point and resumes from
+// the file position the first half reached, worked out at the
+// video speed under it, so the picture carries on where it left
+// off instead of starting over. Overlays fully before or after the
+// point are untouched, and the corner, size, volume, mute flag and
+// name survive on both halves. Splitting changes nothing about
+// how the overlay looks, it just lets the two halves move on
+// their own afterwards. With nothing straddling the point the
+// list comes back as it was. Mirrors splitAudioClips in
+// timeline.js.
+export function splitPips(list, at, videoClips) {
+  if (!list.length) return list;
+  const used = new Set(list.map((c) => c.id));
+  let changed = false;
+  const out = [];
+  for (const clip of list) {
+    const end = clip.start + clip.duration;
+    if (at <= clip.start || at >= end) {
+      out.push(clip);
+      continue;
+    }
+    changed = true;
+    const first = { ...clip, duration: at - clip.start };
+    const secondId = splitSecondId(clip.id, used);
+    used.add(secondId);
+    const second = {
+      ...clip,
+      id: secondId,
+      start: at,
+      duration: end - at,
+      sourceIn: pipFileOffset(clip, at, undefined, videoClips),
+    };
+    out.push(first, second);
+  }
+  return changed ? out : list;
+}
+
 // Move overlays to match a timeline with ranges cut out of it, the
 // same way the captions and text overlays move. An overlay that sat
 // fully inside a cut range goes away, one that straddled a cut gets
@@ -285,18 +342,29 @@ export function shiftPips(list, ranges, videoClips) {
   };
   const out = [];
   for (const clip of list || []) {
-    const start = clip.start - cutBefore(clip.start);
-    const end = clip.start + clip.duration - cutBefore(clip.start + clip.duration);
-    if (end <= start) continue;
-    let sourceIn = pipClipSourceIn(clip);
-    const containing = sorted.find((r) => clip.start >= r.start && clip.start < r.end);
-    if (containing) {
-      // The overlay resumes where the cut ends, so its new source
-      // offset is the file position at that point, which already
-      // counts from the old offset.
-      sourceIn = pipFileOffset(clip, containing.end, undefined, videoClips);
+    // Split the overlay at every cut boundary inside it first, so
+    // an overlay straddling a cut becomes two overlays and the part
+    // after the cut resumes from the right spot in its file, instead
+    // of one overlay playing straight through the removed bit.
+    let pieces = [clip];
+    for (const r of sorted) {
+      pieces = splitPips(pieces, r.start, videoClips);
+      pieces = splitPips(pieces, r.end, videoClips);
     }
-    out.push({ ...clip, start, duration: end - start, sourceIn });
+    for (const piece of pieces) {
+      const start = piece.start - cutBefore(piece.start);
+      const end = piece.start + piece.duration - cutBefore(piece.start + piece.duration);
+      if (end <= start) continue;
+      let sourceIn = pipClipSourceIn(piece);
+      const containing = sorted.find((r) => piece.start >= r.start && piece.start < r.end);
+      if (containing) {
+        // The overlay resumes where the cut ends, so its new source
+        // offset is the file position at that point, which already
+        // counts from the old offset.
+        sourceIn = pipFileOffset(piece, containing.end, undefined, videoClips);
+      }
+      out.push({ ...piece, start, duration: end - start, sourceIn });
+    }
   }
   return out;
 }

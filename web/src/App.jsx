@@ -60,6 +60,7 @@ import {
   removePipClip,
   setPipClipVolume,
   shiftPips,
+  splitPips,
   togglePipClipMuted,
   updatePipClip,
   visiblePipsAtTime,
@@ -663,8 +664,11 @@ export default function App() {
     setClips(out);
     // The audio track splits at the same point, so a voiceover
     // straddling the cut becomes two clips and the second half
-    // picks up where the words left off.
+    // picks up where the words left off. The overlays split too,
+    // so one sitting across the cut becomes two and the second
+    // half picks up partway through its own video.
     setAudioClips((prev) => splitAudioClips(prev, playhead, clips));
+    setPips((prev) => splitPips(prev, playhead, clips));
     setAgentSay(`Split ${currentClip.name} at ${formatTime(playhead)}.`);
   }
 
@@ -960,6 +964,7 @@ export default function App() {
         recordHistory();
         setClips(out);
         setAudioClips((prev) => splitAudioClips(prev, parsed.seconds, clips));
+        setPips((prev) => splitPips(prev, parsed.seconds, clips));
         setAgentSay(`Split ${clip.name} at ${formatTime(parsed.seconds)}.`);
         return;
       }

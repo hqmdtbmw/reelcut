@@ -18,6 +18,7 @@ import {
   setPipMuted,
   setPipVolume,
   shiftPips,
+  splitPips,
   togglePipClipMuted,
   updatePipClip,
   visiblePipsAtTime,
@@ -297,17 +298,85 @@ test("a cutdown drops overlays past the end and trims a straddler", () => {
 
 // Moving the overlays with the cuts.
 
+test("splitting an overlay at a point gives two overlays", () => {
+  const clip = { ...pip(2, 6, "top-left", "large"), volume: 0.5, muted: true };
+  const list = splitPips([clip], 4);
+  assert.equal(list.length, 2);
+  assert.equal(list[0].id, "pip-1");
+  assert.equal(list[0].start, 2);
+  assert.equal(list[0].duration, 2);
+  assert.equal(list[0].sourceIn, 0);
+  assert.equal(list[1].id, "pip-1-s1");
+  assert.equal(list[1].start, 4);
+  assert.equal(list[1].duration, 4);
+  // The second half picks up where the first half left off, 2
+  // seconds into its own video, instead of starting over.
+  assert.equal(list[1].sourceIn, 2);
+  for (const half of list) {
+    assert.equal(half.name, "facecam.mp4");
+    assert.equal(half.position, "top-left");
+    assert.equal(half.size, "large");
+    assert.equal(half.volume, 0.5);
+    assert.equal(half.muted, true);
+  }
+});
+
+test("a split under a sped up clip counts double", () => {
+  const fast = { sourceIn: 0, sourceOut: 20, speed: 2 };
+  const list = splitPips([pip(2, 6)], 4, [fast]);
+  assert.equal(list.length, 2);
+  assert.equal(list[1].id, "pip-1-s1");
+  assert.equal(list[1].sourceIn, 4);
+});
+
+test("splitting again numbers the next half, never a nested id", () => {
+  const once = splitPips([pip(2, 8)], 4);
+  const twice = splitPips(once, 6);
+  assert.deepEqual(
+    twice.map((c) => c.id),
+    ["pip-1", "pip-1-s1", "pip-1-s2"],
+  );
+  assert.ok(twice.every((c) => !c.id.includes("-b")));
+  assert.equal(twice[2].start, 6);
+  assert.equal(twice[2].duration, 4);
+  assert.equal(twice[2].sourceIn, 4);
+});
+
+test("splitting outside an overlay leaves the list alone", () => {
+  const clip = pip(2, 4);
+  assert.deepEqual(splitPips([clip], 1), [clip]);
+  assert.deepEqual(splitPips([clip], 6), [clip]);
+  assert.deepEqual(splitPips([], 3), []);
+});
+
+test("a split counts from an overlay that already starts partway in", () => {
+  const clip = { ...pip(2, 6), sourceIn: 3 };
+  const list = splitPips([clip], 4);
+  assert.equal(list.length, 2);
+  assert.equal(list[0].sourceIn, 3);
+  assert.equal(list[1].sourceIn, 5);
+});
+
 test("an overlay fully inside a removed range goes away", () => {
   const list = shiftPips([pip(5, 2)], [{ start: 4, end: 8 }]);
   assert.deepEqual(list, []);
 });
 
-test("an overlay straddling a cut is trimmed to what is left", () => {
+test("an overlay straddling a cut splits into two at the cut", () => {
   const list = shiftPips([pip(2, 6)], [{ start: 4, end: 6 }]);
-  assert.equal(list.length, 1);
+  assert.equal(list.length, 2);
+  assert.equal(list[0].id, "pip-1");
   assert.equal(list[0].start, 2);
-  assert.equal(list[0].duration, 4);
+  assert.equal(list[0].duration, 2);
   assert.equal(list[0].position, "bottom-right");
+  // The part after the cut is its own overlay now, and it resumes
+  // 4 seconds into its own video, past the 2 seconds the cut took.
+  // It takes the next free split number, since the split at the
+  // start of the cut already used the first one.
+  assert.equal(list[1].id, "pip-1-s2");
+  assert.equal(list[1].start, 4);
+  assert.equal(list[1].duration, 2);
+  assert.equal(list[1].sourceIn, 4);
 });
 
 test("an overlay starting inside a cut loses its left end", () => {
@@ -339,10 +408,9 @@ test("a trimmed bit under a sped up clip counts double", () => {
 
 test("an overlay straddling a cut keeps its source offset", () => {
   const list = shiftPips([pip(2, 6)], [{ start: 4, end: 6 }]);
-  assert.equal(list.length, 1);
-  assert.equal(list[0].start, 2);
-  assert.equal(list[0].duration, 4);
+  assert.equal(list.length, 2);
   assert.equal(list[0].sourceIn, 0);
+  assert.equal(list[1].sourceIn, 4);
 });
 
 test("an overlay before a cut keeps its source offset", () => {
@@ -389,10 +457,10 @@ test("several overlays move through several cuts at once", () => {
   assert.equal(list.length, 3);
   assert.equal(list[0].id, "pip-1");
   assert.equal(list[0].start, 1);
-  assert.equal(list[1].id, "pip-2");
+  assert.equal(list[1].id, "pip-2-s1");
   assert.equal(list[1].start, 4);
   assert.equal(list[1].duration, 1);
-  assert.equal(list[2].id, "pip-3");
+  assert.equal(list[2].id, "pip-3-s1");
   assert.equal(list[2].start, 7);
   assert.equal(list[2].duration, 3);
 });
@@ -407,11 +475,16 @@ test("a cutdown still works after the overlays moved with a cut", () => {
   const first = pip(2, 4);
   const second = makePipClip("pip-2", "other.mp4", null, 8, 5, "top-left", "small", 10);
   const moved = shiftPips([first, second], [{ start: 3, end: 5 }]);
-  assert.equal(moved[0].duration, 2);
-  assert.equal(moved[1].start, 6);
+  // The first overlay straddled the cut, so it is two overlays
+  // now, 1 second each side of it, and the second one moved up.
+  assert.equal(moved.length, 3);
+  assert.equal(moved[0].duration, 1);
+  assert.equal(moved[1].start, 3);
+  assert.equal(moved[1].duration, 1);
+  assert.equal(moved[2].start, 6);
   const cut = cutdownPips(moved, 8);
-  assert.equal(cut.length, 2);
-  assert.equal(cut[1].duration, 2);
+  assert.equal(cut.length, 3);
+  assert.equal(cut[2].duration, 2);
 });
 
 test("a saved single overlay migrates into a one-item list", () => {
