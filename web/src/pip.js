@@ -172,3 +172,32 @@ export function cutdownPips(list, seconds) {
     .filter((c) => c.start < seconds)
     .map((c) => (c.start + c.duration > seconds ? { ...c, duration: seconds - c.start } : c));
 }
+
+// Move overlays to match a timeline with ranges cut out of it, the
+// same way the captions and text overlays move. An overlay that sat
+// fully inside a cut range goes away, one that straddled a cut gets
+// shorter, and the rest shift earlier by the cut time. Overlays
+// carry no source offset, they always play from the start of their
+// file, so a straddling overlay replays the cut seconds of its own
+// video from its new start instead of resuming partway through.
+// The overlay still lands over the right part of the main video,
+// which is what the cut is for.
+export function shiftPips(list, ranges) {
+  const sorted = [...(ranges || [])].sort((a, b) => a.start - b.start);
+  const cutBefore = (t) => {
+    let cut = 0;
+    for (const r of sorted) {
+      if (r.start >= t) break;
+      cut += Math.min(r.end, t) - r.start;
+    }
+    return cut;
+  };
+  const out = [];
+  for (const clip of list || []) {
+    const start = clip.start - cutBefore(clip.start);
+    const end = clip.start + clip.duration - cutBefore(clip.start + clip.duration);
+    if (end <= start) continue;
+    out.push({ ...clip, start, duration: end - start });
+  }
+  return out;
+}

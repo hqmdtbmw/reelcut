@@ -58,6 +58,7 @@ import {
   pipsFromState,
   removePipClip,
   setPipClipVolume,
+  shiftPips,
   togglePipClipMuted,
   updatePipClip,
   visiblePipsAtTime,
@@ -668,6 +669,7 @@ export default function App() {
     if (!selected) return;
     recordHistory();
     setClips(deleteClip(clips, selected.id));
+    setPips((prev) => shiftPips(prev, [{ start: selected.start, end: selected.start + clipDuration(selected) }]));
     setSelectedId(null);
     setAgentSay(`Deleted ${selected.name}.`);
   }
@@ -769,9 +771,11 @@ export default function App() {
       // The audio track moves with the cuts, the same as the captions
       // and text do, so a voiceover stays lined up with the video.
       setAudioClips((prev) => shiftAudioClips(prev, allRanges, clips));
+      setPips((prev) => shiftPips(prev, allRanges));
       seek(0);
       const audioNote = audioClipsRef.current.length ? " The audio track moved with the cuts." : "";
-      setAgentSay(`Removed ${allRanges.length} silent ${allRanges.length === 1 ? "stretch" : "stretches"}, ${removed.toFixed(1)} seconds in total. The edit is tighter now.${audioNote}`);
+      const pipNote = pipsRef.current.length ? " The overlays moved with the cuts." : "";
+      setAgentSay(`Removed ${allRanges.length} silent ${allRanges.length === 1 ? "stretch" : "stretches"}, ${removed.toFixed(1)} seconds in total. The edit is tighter now.${audioNote}${pipNote}`);
     } catch (err) {
       setAgentSay("I could not read the audio in this clip, so I left the timeline alone.");
     } finally {
@@ -807,10 +811,12 @@ export default function App() {
     setCaptions((prev) => shiftTimedItems(prev, ranges));
     setOverlays((prev) => shiftTimedItems(prev, ranges));
     setAudioClips((prev) => shiftAudioClips(prev, ranges, clips));
+    setPips((prev) => shiftPips(prev, ranges));
     seek(0);
     const audioNote = audioClipsRef.current.length ? " The audio track moved with the cuts." : "";
+    const pipNote = pipsRef.current.length ? " The overlays moved with the cuts." : "";
     setAgentSay(
-      `Cut ${ranges.length} boring ${ranges.length === 1 ? "stretch" : "stretches"}, ${removed.toFixed(1)} seconds in total. The captions and text moved with the cuts.${audioNote}`,
+      `Cut ${ranges.length} boring ${ranges.length === 1 ? "stretch" : "stretches"}, ${removed.toFixed(1)} seconds in total. The captions and text moved with the cuts.${audioNote}${pipNote}`,
     );
   }
 
@@ -895,6 +901,7 @@ export default function App() {
         recordHistory();
         setClips(cutRange(clips, 0, seconds));
         setAudioClips((prev) => shiftAudioClips(prev, [{ start: 0, end: seconds }], clips));
+        setPips((prev) => shiftPips(prev, [{ start: 0, end: seconds }]));
         seek(0);
         setAgentSay(`Cut the first ${seconds} seconds.`);
         return;
@@ -956,6 +963,9 @@ export default function App() {
         if (!clip) return setAgentSay(`There is no clip ${parsed.index + 1}. You have ${packed.length}.`);
         recordHistory();
         setClips(deleteClip(clips, clip.id));
+        // Deleting a clip closes the timeline up, so the overlays
+        // shift with it, the same as they do for the other cuts.
+        setPips((prev) => shiftPips(prev, [{ start: clip.start, end: clip.start + clipDuration(clip) }]));
         setAgentSay(`Deleted clip ${parsed.index + 1}, ${clip.name}.`);
         return;
       }

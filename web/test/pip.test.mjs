@@ -15,6 +15,7 @@ import {
   setPipClipVolume,
   setPipMuted,
   setPipVolume,
+  shiftPips,
   togglePipClipMuted,
   updatePipClip,
   visiblePipsAtTime,
@@ -236,6 +237,79 @@ test("a cutdown drops overlays past the end and trims a straddler", () => {
   assert.equal(list[0].duration, 4);
   assert.equal(list[1].duration, 2);
   assert.equal(list[1].start, 8);
+});
+
+// Moving the overlays with the cuts.
+
+test("an overlay fully inside a removed range goes away", () => {
+  const list = shiftPips([pip(5, 2)], [{ start: 4, end: 8 }]);
+  assert.deepEqual(list, []);
+});
+
+test("an overlay straddling a cut is trimmed to what is left", () => {
+  const list = shiftPips([pip(2, 6)], [{ start: 4, end: 6 }]);
+  assert.equal(list.length, 1);
+  assert.equal(list[0].start, 2);
+  assert.equal(list[0].duration, 4);
+  assert.equal(list[0].position, "bottom-right");
+});
+
+test("an overlay starting inside a cut loses its left end", () => {
+  const list = shiftPips([pip(5, 4)], [{ start: 4, end: 7 }]);
+  assert.equal(list.length, 1);
+  assert.equal(list[0].start, 4);
+  assert.equal(list[0].duration, 2);
+});
+
+test("an overlay after a cut shifts earlier by the cut time", () => {
+  const list = shiftPips([pip(10, 3)], [{ start: 4, end: 6 }]);
+  assert.equal(list.length, 1);
+  assert.equal(list[0].start, 8);
+  assert.equal(list[0].duration, 3);
+});
+
+test("an overlay before a cut does not move", () => {
+  const clip = pip(1, 2);
+  const list = shiftPips([clip], [{ start: 4, end: 6 }]);
+  assert.equal(list.length, 1);
+  assert.equal(list[0].start, 1);
+  assert.equal(list[0].duration, 2);
+});
+
+test("several overlays move through several cuts at once", () => {
+  const first = pip(1, 2);
+  const second = makePipClip("pip-2", "other.mp4", null, 5, 2, "top-left", "small", 10);
+  const third = makePipClip("pip-3", "third.mp4", null, 10, 4, "top-right", "small", 10);
+  const list = shiftPips([first, second, third], [
+    { start: 4, end: 6 },
+    { start: 9, end: 11 },
+  ]);
+  assert.equal(list.length, 3);
+  assert.equal(list[0].id, "pip-1");
+  assert.equal(list[0].start, 1);
+  assert.equal(list[1].id, "pip-2");
+  assert.equal(list[1].start, 4);
+  assert.equal(list[1].duration, 1);
+  assert.equal(list[2].id, "pip-3");
+  assert.equal(list[2].start, 7);
+  assert.equal(list[2].duration, 3);
+});
+
+test("with no cuts the overlays come back as they were", () => {
+  const clip = pip(2, 4);
+  assert.deepEqual(shiftPips([clip], []), [clip]);
+  assert.deepEqual(shiftPips([clip]), [clip]);
+});
+
+test("a cutdown still works after the overlays moved with a cut", () => {
+  const first = pip(2, 4);
+  const second = makePipClip("pip-2", "other.mp4", null, 8, 5, "top-left", "small", 10);
+  const moved = shiftPips([first, second], [{ start: 3, end: 5 }]);
+  assert.equal(moved[0].duration, 2);
+  assert.equal(moved[1].start, 6);
+  const cut = cutdownPips(moved, 8);
+  assert.equal(cut.length, 2);
+  assert.equal(cut[1].duration, 2);
 });
 
 test("a saved single overlay migrates into a one-item list", () => {
