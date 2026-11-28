@@ -41,10 +41,12 @@ export function setPipMuted(clip, muted = true) {
 }
 
 // Make one picture in picture clip. It starts at a point on the
-// timeline and plays for its duration, from the start of its file.
-// The corner defaults to bottom right and the size to medium, and
-// it plays at full volume unless you turn it down.
-export function makePipClip(id, name, url, start, duration, position, size, sourceDuration = 0) {
+// timeline and plays for its duration. sourceIn is where in its
+// file the clip starts, so a clip trimmed from the left picks up
+// partway through its file instead of starting over. The corner
+// defaults to bottom right and the size to medium, and it plays
+// at full volume unless you turn it down.
+export function makePipClip(id, name, url, start, duration, position, size, sourceDuration = 0, sourceIn = 0) {
   return {
     id,
     name,
@@ -54,9 +56,17 @@ export function makePipClip(id, name, url, start, duration, position, size, sour
     position: PIP_POSITIONS.includes(position) ? position : PIP_DEFAULT_POSITION,
     size: Object.prototype.hasOwnProperty.call(PIP_SIZES, size) ? size : PIP_DEFAULT_SIZE,
     sourceDuration: Math.max(0, sourceDuration || 0),
+    sourceIn: Math.max(0, sourceIn || 0),
     volume: 1,
     muted: false,
   };
+}
+
+// Where in its file an overlay clip starts. Clips saved before the
+// offset existed have none, so they count as starting at zero.
+export function pipClipSourceIn(clip) {
+  if (!clip || !Number.isFinite(clip.sourceIn)) return 0;
+  return Math.max(0, clip.sourceIn);
 }
 
 // Keep a picture in picture clip inside the edit and on valid
@@ -75,6 +85,7 @@ export function clampPipClip(clip, total) {
     duration,
     position: PIP_POSITIONS.includes(clip.position) ? clip.position : PIP_DEFAULT_POSITION,
     size: Object.prototype.hasOwnProperty.call(PIP_SIZES, clip.size) ? clip.size : PIP_DEFAULT_SIZE,
+    sourceIn: pipClipSourceIn(clip),
     volume: clampPipVolume(clip.volume),
     muted: Boolean(clip.muted),
   };
@@ -103,14 +114,90 @@ export function pipRect(clip, frameWidth, frameHeight) {
   return { x, y, width, height };
 }
 
+// How long one video clip plays for on the timeline, from its
+// source range and its speed. The overlay helpers need this to
+// work out the speed under a point on the timeline. It mirrors
+// clipDuration in timeline.js, kept here so this file stands on
+// its own.
+function videoClipDuration(clip) {
+  const len = Math.max(0, (clip.sourceOut || 0) - (clip.sourceIn || 0));
+  return clip.speed > 0 ? len / clip.speed : len;
+}
+
+// Pack video clips back to back, so each one knows where it starts
+// on the timeline. Mirrors packClips in timeline.js.
+function packVideoClips(clips) {
+  let t = 0;
+  return (clips || []).map((clip) => {
+    const next = { ...clip, start: t };
+    t += videoClipDuration(next);
+    return next;
+  });
+}
+
+// A speed as a real playback rate. Bad input falls back to normal
+// speed, the same way the volume clamps fall back to full.
+function clampPipRate(speed) {
+  if (!Number.isFinite(speed) || speed <= 0) return 1;
+  return speed;
+}
+
+// The overlay in rate segments: each stretch of it that sits under
+// a single video clip, with that clip's speed. Stretches with the
+// same rate join up, and a stretch with no video under it plays at
+// normal speed. With no video clips the whole overlay is one
+// stretch at normal speed. Mirrors audioRateSegments in timeline.js.
+export function pipRateSegments(clip, videoClips) {
+  if (!clip || clip.duration <= 0) return [];
+  const start = clip.start;
+  const end = clip.start + clip.duration;
+  const packed = packVideoClips(videoClips);
+  const out = [];
+  const push = (s, e, rate) => {
+    if (e <= s) return;
+    const last = out[out.length - 1];
+    if (last && last.rate === rate && last.end === s) last.end = e;
+    else out.push({ start: s, end: e, rate });
+  };
+  if (!packed.length) {
+    push(start, end, 1);
+    return out;
+  }
+  let cursor = start;
+  for (const video of packed) {
+    const clipStart = video.start;
+    const clipEnd = video.start + videoClipDuration(video);
+    if (clipEnd <= cursor) continue;
+    if (clipStart > cursor) push(cursor, Math.min(clipStart, end), 1);
+    if (clipStart >= end) break;
+    push(Math.max(clipStart, cursor), Math.min(clipEnd, end), clampPipRate(video.speed));
+    cursor = Math.min(clipEnd, end);
+    if (cursor >= end) break;
+  }
+  if (cursor < end) push(cursor, end, 1);
+  return out;
+}
+
 // Where in its file the overlay video should be, at a point on the
-// timeline. The clip starts at the beginning of its file, so the
-// offset is just how far past its start the playhead is. When the
-// file length is known and the clip runs longer than the file, the
-// offset wraps back to the start, since the video loops.
-export function pipFileOffset(clip, time, fileDuration) {
+// timeline. The clip starts at its source offset in the file, then
+// each timeline second under a sped up clip counts for more file
+// seconds, so this adds up the rate over every stretch from the
+// clip start to that point. Before the clip it is the source
+// offset, past the end it stops at the end, so a seek never runs
+// past what the clip covers. When the file length is known and the
+// clip runs longer than the file, the offset wraps back to the
+// start, since the video loops. Pass the video clips when you have
+// them, so the speed is known; without them the offset counts at
+// normal speed.
+export function pipFileOffset(clip, time, fileDuration, videoClips) {
   if (!clip) return 0;
-  const offset = Math.max(0, time - clip.start);
+  const end = Math.min(Math.max(time, clip.start), clip.start + clip.duration);
+  let offset = pipClipSourceIn(clip);
+  for (const seg of pipRateSegments(clip, videoClips)) {
+    const s = Math.max(seg.start, clip.start);
+    const e = Math.min(seg.end, end);
+    if (e > s) offset += (e - s) * seg.rate;
+  }
   if (Number.isFinite(fileDuration) && fileDuration > 0) {
     return offset % fileDuration;
   }
@@ -176,13 +263,17 @@ export function cutdownPips(list, seconds) {
 // Move overlays to match a timeline with ranges cut out of it, the
 // same way the captions and text overlays move. An overlay that sat
 // fully inside a cut range goes away, one that straddled a cut gets
-// shorter, and the rest shift earlier by the cut time. Overlays
-// carry no source offset, they always play from the start of their
-// file, so a straddling overlay replays the cut seconds of its own
-// video from its new start instead of resuming partway through.
-// The overlay still lands over the right part of the main video,
-// which is what the cut is for.
-export function shiftPips(list, ranges) {
+// shorter, and the rest shift earlier by the cut time. An overlay
+// whose start sat inside a cut range loses its left end, and the
+// file seconds that left end used up move into the source offset,
+// so the overlay resumes partway through its file instead of
+// starting over. The offset is worked out at the video speed under
+// the cut part, the same way the preview seeks, so a trimmed bit
+// under a sped up clip counts double. Pass the video clips when
+// you have them, so the speed is known; without them the trim
+// counts at normal speed. The overlay still lands over the right
+// part of the main video, which is what the cut is for.
+export function shiftPips(list, ranges, videoClips) {
   const sorted = [...(ranges || [])].sort((a, b) => a.start - b.start);
   const cutBefore = (t) => {
     let cut = 0;
@@ -197,7 +288,15 @@ export function shiftPips(list, ranges) {
     const start = clip.start - cutBefore(clip.start);
     const end = clip.start + clip.duration - cutBefore(clip.start + clip.duration);
     if (end <= start) continue;
-    out.push({ ...clip, start, duration: end - start });
+    let sourceIn = pipClipSourceIn(clip);
+    const containing = sorted.find((r) => clip.start >= r.start && clip.start < r.end);
+    if (containing) {
+      // The overlay resumes where the cut ends, so its new source
+      // offset is the file position at that point, which already
+      // counts from the old offset.
+      sourceIn = pipFileOffset(clip, containing.end, undefined, videoClips);
+    }
+    out.push({ ...clip, start, duration: end - start, sourceIn });
   }
   return out;
 }

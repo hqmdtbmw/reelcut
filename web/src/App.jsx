@@ -310,7 +310,7 @@ export default function App() {
       const rate = currentClip ? currentClip.speed : 1;
       if (el.playbackRate !== rate) el.playbackRate = rate;
       const fileDuration = Number.isFinite(el.duration) && el.duration > 0 ? el.duration : undefined;
-      const offset = pipFileOffset(pip, playhead, fileDuration);
+      const offset = pipFileOffset(pip, playhead, fileDuration, packed);
       const seekTo = fileDuration ? Math.min(offset, Math.max(0, fileDuration - 0.05)) : offset;
       const visible = playhead >= pip.start && playhead < pip.start + pip.duration;
       if (playing && visible) {
@@ -323,7 +323,7 @@ export default function App() {
         }
       }
     }
-  }, [playing, playhead, pips, currentClip]);
+  }, [playing, playhead, pips, currentClip, packed]);
 
   // Drive playback: advance the playhead, hop to the next clip, apply fades.
   useEffect(() => {
@@ -672,7 +672,7 @@ export default function App() {
     if (!selected) return;
     recordHistory();
     setClips(deleteClip(clips, selected.id));
-    setPips((prev) => shiftPips(prev, [{ start: selected.start, end: selected.start + clipDuration(selected) }]));
+    setPips((prev) => shiftPips(prev, [{ start: selected.start, end: selected.start + clipDuration(selected) }], clips));
     setSelectedId(null);
     setAgentSay(`Deleted ${selected.name}.`);
   }
@@ -774,7 +774,7 @@ export default function App() {
       // The audio track moves with the cuts, the same as the captions
       // and text do, so a voiceover stays lined up with the video.
       setAudioClips((prev) => shiftAudioClips(prev, allRanges, clips));
-      setPips((prev) => shiftPips(prev, allRanges));
+      setPips((prev) => shiftPips(prev, allRanges, clips));
       seek(0);
       const audioNote = audioClipsRef.current.length ? " The audio track moved with the cuts." : "";
       const pipNote = pipsRef.current.length ? " The overlays moved with the cuts." : "";
@@ -814,7 +814,7 @@ export default function App() {
     setCaptions((prev) => shiftTimedItems(prev, ranges));
     setOverlays((prev) => shiftTimedItems(prev, ranges));
     setAudioClips((prev) => shiftAudioClips(prev, ranges, clips));
-    setPips((prev) => shiftPips(prev, ranges));
+    setPips((prev) => shiftPips(prev, ranges, clips));
     seek(0);
     const audioNote = audioClipsRef.current.length ? " The audio track moved with the cuts." : "";
     const pipNote = pipsRef.current.length ? " The overlays moved with the cuts." : "";
@@ -904,7 +904,7 @@ export default function App() {
         recordHistory();
         setClips(cutRange(clips, 0, seconds));
         setAudioClips((prev) => shiftAudioClips(prev, [{ start: 0, end: seconds }], clips));
-        setPips((prev) => shiftPips(prev, [{ start: 0, end: seconds }]));
+        setPips((prev) => shiftPips(prev, [{ start: 0, end: seconds }], clips));
         seek(0);
         setAgentSay(`Cut the first ${seconds} seconds.`);
         return;
@@ -970,7 +970,7 @@ export default function App() {
         setClips(deleteClip(clips, clip.id));
         // Deleting a clip closes the timeline up, so the overlays
         // shift with it, the same as they do for the other cuts.
-        setPips((prev) => shiftPips(prev, [{ start: clip.start, end: clip.start + clipDuration(clip) }]));
+        setPips((prev) => shiftPips(prev, [{ start: clip.start, end: clip.start + clipDuration(clip) }], clips));
         setAgentSay(`Deleted clip ${parsed.index + 1}, ${clip.name}.`);
         return;
       }
@@ -1279,7 +1279,7 @@ export default function App() {
           if (pip.start < clipStart + clipLen && pip.start + pip.duration > clipStart) {
             const fileDuration =
               Number.isFinite(pipVideo.duration) && pipVideo.duration > 0 ? pipVideo.duration : undefined;
-            const offset = pipFileOffset(pip, Math.max(clipStart, pip.start), fileDuration);
+            const offset = pipFileOffset(pip, Math.max(clipStart, pip.start), fileDuration, packed);
             pipVideo.currentTime = fileDuration ? Math.min(offset, Math.max(0, fileDuration - 0.05)) : offset;
             await waitFor(pipVideo, "seeked");
             pipVideo.playbackRate = clip.speed;
@@ -1337,7 +1337,7 @@ export default function App() {
             if (t >= pip.start && t < pip.start + pip.duration) {
               const fileDuration =
                 Number.isFinite(pipVideo.duration) && pipVideo.duration > 0 ? pipVideo.duration : undefined;
-              const offset = pipFileOffset(pip, t, fileDuration);
+              const offset = pipFileOffset(pip, t, fileDuration, packed);
               const seekTo = fileDuration ? Math.min(offset, Math.max(0, fileDuration - 0.05)) : offset;
               if (Math.abs(pipVideo.currentTime - seekTo) > 0.3) pipVideo.currentTime = seekTo;
               if (pipVideo.paused) {

@@ -119,8 +119,8 @@ function fakeAudioClip({ start = 5, duration = 10, volume = 0.8, muted = false, 
   };
 }
 
-function fakePip({ start = 2, duration = 4, volume = 0.9, muted = false, unreadable = false } = {}) {
-  const clip = makePipClip("pip-1", "facecam.mp4", null, start, duration, "bottom-right", "medium", 30);
+function fakePip({ start = 2, duration = 4, volume = 0.9, muted = false, unreadable = false, sourceIn = 0 } = {}) {
+  const clip = makePipClip("pip-1", "facecam.mp4", null, start, duration, "bottom-right", "medium", 30, sourceIn);
   clip.volume = volume;
   clip.muted = muted;
   clip.file = {
@@ -504,6 +504,26 @@ test("the picture in picture sound mixes into the export", async () => {
   assert.equal(gain.gain.value, 0.9);
   assert.deepEqual(source.connectedTo, [gain]);
   assert.deepEqual(gain.connectedTo, [ctx.dest]);
+  assert.equal(mix.pipSource, source);
+});
+
+test("a trimmed overlay sound starts partway through its file", async () => {
+  const ctx = new FakeAudioContext();
+  const clip = makeClip("a", "a.mp4", null, 10);
+  const mix = await buildExportAudio({
+    createAudioContext: () => ctx,
+    video: {},
+    music: null,
+    firstClip: clip,
+    pip: fakePip({ start: 2, duration: 4, volume: 0.9, sourceIn: 3 }),
+  });
+  assert.equal(ctx.sources.length, 1);
+  const source = ctx.sources[0];
+  assert.equal(source.started, true);
+  // It starts 2 seconds into the export, 3 seconds into its file.
+  assert.equal(source.startWhen, 2);
+  assert.equal(source.startOffset, 3);
+  assert.equal(source.stopWhen, 6);
   assert.equal(mix.pipSource, source);
 });
 

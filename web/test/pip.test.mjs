@@ -7,7 +7,9 @@ import {
   clampPipVolume,
   cutdownPips,
   makePipClip,
+  pipClipSourceIn,
   pipFileOffset,
+  pipRateSegments,
   pipRect,
   pipVisibleAtTime,
   pipsFromState,
@@ -116,11 +118,65 @@ test("the file offset counts from the overlay start", () => {
 });
 
 test("the file offset wraps when the overlay loops", () => {
-  assert.equal(pipFileOffset(pip(2, 10), 14, 10), 2);
+  // A 12 second overlay on a 10 second file: 11 seconds in, the
+  // file has wrapped and is 1 second into its second play.
+  assert.equal(pipFileOffset(pip(2, 12), 13, 10), 1);
+});
+
+test("the file offset stops at the end of the overlay", () => {
+  assert.equal(pipFileOffset(pip(2, 10), 14, 10), 0);
 });
 
 test("the file offset does not wrap when the file length is unknown", () => {
-  assert.equal(pipFileOffset(pip(2, 10), 14), 12);
+  assert.equal(pipFileOffset(pip(2, 10), 14), 10);
+});
+
+test("a new overlay clip starts at its source offset", () => {
+  const clip = makePipClip("pip-1", "facecam.mp4", null, 2, 4, "bottom-right", "medium", 10, 3);
+  assert.equal(clip.sourceIn, 3);
+  assert.equal(makePipClip("pip-1", "facecam.mp4", null, 2, 4).sourceIn, 0);
+});
+
+test("an old overlay without a source offset counts as starting at zero", () => {
+  const old = pip(2, 4);
+  delete old.sourceIn;
+  assert.equal(pipClipSourceIn(old), 0);
+  assert.equal(pipClipSourceIn(null), 0);
+  assert.equal(pipClipSourceIn({ ...pip(), sourceIn: -2 }), 0);
+  assert.equal(pipFileOffset(old, 5, 10), 3);
+  assert.equal(clampPipClip(old, 30).sourceIn, 0);
+});
+
+test("the file offset starts at the source offset", () => {
+  const clip = { ...pip(2, 4), sourceIn: 3 };
+  assert.equal(pipFileOffset(clip, 2, 10), 3);
+  assert.equal(pipFileOffset(clip, 5, 10), 6);
+  assert.equal(pipFileOffset(clip, 1, 10), 3);
+});
+
+test("the file offset wraps from the source offset when the overlay loops", () => {
+  // A 10 second file, the overlay starts 8 seconds in and runs
+  // 5 timeline seconds: it plays 8 to 10, wraps, and ends 3
+  // seconds into its second play.
+  const clip = { ...pip(2, 5), sourceIn: 8 };
+  assert.equal(pipFileOffset(clip, 7, 10), 3);
+});
+
+test("the file offset counts a sped up stretch at its speed", () => {
+  const fast = { sourceIn: 0, sourceOut: 10, speed: 2 };
+  assert.equal(pipFileOffset(pip(2, 4), 5, 10, [fast]), 6);
+  assert.equal(pipFileOffset({ ...pip(2, 4), sourceIn: 1 }, 5, 10, [fast]), 7);
+  assert.equal(pipFileOffset(pip(2, 4), 5, 10), 3);
+});
+
+test("the rate segments follow the video clip under each stretch", () => {
+  const fast = { sourceIn: 0, sourceOut: 10, speed: 2 };
+  const normal = { sourceIn: 0, sourceOut: 5, speed: 1 };
+  assert.deepEqual(pipRateSegments(pip(2, 4), [fast, normal]), [
+    { start: 2, end: 5, rate: 2 },
+    { start: 5, end: 6, rate: 1 },
+  ]);
+  assert.deepEqual(pipRateSegments(pip(2, 4), []), [{ start: 2, end: 6, rate: 1 }]);
 });
 
 test("a new overlay clip is full volume and unmuted", () => {
@@ -259,6 +315,52 @@ test("an overlay starting inside a cut loses its left end", () => {
   assert.equal(list.length, 1);
   assert.equal(list[0].start, 4);
   assert.equal(list[0].duration, 2);
+});
+
+test("a cut that trims the left of an overlay moves its source offset", () => {
+  const list = shiftPips([pip(5, 4)], [{ start: 4, end: 7 }]);
+  assert.equal(list[0].sourceIn, 2);
+  // The offset counts from where the overlay already was, so a
+  // second cut keeps moving it forward instead of starting over.
+  const again = shiftPips(list, [{ start: 2, end: 5 }]);
+  assert.equal(again[0].start, 2);
+  assert.equal(again[0].duration, 1);
+  assert.equal(again[0].sourceIn, 3);
+});
+
+test("a trimmed bit under a sped up clip counts double", () => {
+  const fast = { sourceIn: 0, sourceOut: 20, speed: 2 };
+  const list = shiftPips([pip(5, 4)], [{ start: 4, end: 7 }], [fast]);
+  assert.equal(list.length, 1);
+  assert.equal(list[0].start, 4);
+  assert.equal(list[0].duration, 2);
+  assert.equal(list[0].sourceIn, 4);
+});
+
+test("an overlay straddling a cut keeps its source offset", () => {
+  const list = shiftPips([pip(2, 6)], [{ start: 4, end: 6 }]);
+  assert.equal(list.length, 1);
+  assert.equal(list[0].start, 2);
+  assert.equal(list[0].duration, 4);
+  assert.equal(list[0].sourceIn, 0);
+});
+
+test("an overlay before a cut keeps its source offset", () => {
+  const clip = { ...pip(1, 2), sourceIn: 3 };
+  const list = shiftPips([clip], [{ start: 4, end: 6 }]);
+  assert.equal(list[0].start, 1);
+  assert.equal(list[0].duration, 2);
+  assert.equal(list[0].sourceIn, 3);
+});
+
+test("an old overlay without a source offset still moves with the cuts", () => {
+  const old = pip(5, 4);
+  delete old.sourceIn;
+  const list = shiftPips([old], [{ start: 4, end: 7 }]);
+  assert.equal(list.length, 1);
+  assert.equal(list[0].start, 4);
+  assert.equal(list[0].duration, 2);
+  assert.equal(list[0].sourceIn, 2);
 });
 
 test("an overlay after a cut shifts earlier by the cut time", () => {

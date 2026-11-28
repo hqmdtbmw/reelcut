@@ -1,4 +1,5 @@
 import { audioClipLoops, audioClipSourceIn, audioRateSegments, clampMusicVolume, effectiveVolume } from "./timeline.js";
+import { pipClipSourceIn } from "./pip.js";
 
 // The export draws video frames to a canvas and records them, but
 // the canvas has no sound of its own. This builds the audio side:
@@ -33,8 +34,8 @@ import { audioClipLoops, audioClipSourceIn, audioRateSegments, clampMusicVolume,
 // not bleed past it. The background music stays at normal speed,
 // it is a bed under the edit, not a voice tied to a clip. The
 // picture in picture overlay works the same way as an audio clip:
-// its file plays from the start at its place on the timeline, at
-// the speed of the video clip underneath, looping when its file
+// its file plays from its source offset at its place on the
+// timeline, at the speed of the video clip underneath, looping when its file
 // runs out before the overlay ends, and stopping at the end of
 // its slot. Its volume and mute follow the same rules as the
 // clip audio, so a muted overlay exports silence.
@@ -137,7 +138,12 @@ export async function buildExportAudio({ createAudioContext, video, music, first
       gain.gain.value = effectiveVolume(overlay);
       pipSource.connect(gain);
       gain.connect(dest);
-      pipSource.start(context.currentTime + overlay.start, 0);
+      // Start at the overlay's source offset in its file, wrapped to
+      // the file length, so a trimmed overlay resumes partway through.
+      // With looping on, the source wraps to the file start after
+      // the first pass, the same as the audio track does.
+      const pipStartOffset = decoded.duration > 0 ? pipClipSourceIn(overlay) % decoded.duration : 0;
+      pipSource.start(context.currentTime + overlay.start, pipStartOffset);
       if (typeof pipSource.stop === "function") {
         pipSource.stop(context.currentTime + overlay.start + overlay.duration);
       }
